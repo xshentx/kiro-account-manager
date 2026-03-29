@@ -787,8 +787,8 @@ fn extract_text_content(content: Option<&Value>) -> String {
     match content {
         None => String::new(),
         Some(Value::String(text)) => text.clone(),
-        Some(Value::Array(_)) => {
-            extract_text_blocks(content.unwrap(), &["text", "input_text", "output_text"])
+        Some(value @ Value::Array(_)) => {
+            extract_text_blocks(value, &["text", "input_text", "output_text"])
         }
         Some(other) => other.to_string(),
     }
@@ -1654,6 +1654,17 @@ mod tests {
                 { "type": "input_image", "image_url": "data:image/png;base64,aGVsbG8=" }
             ]))
         );
+    }
+
+    #[test]
+    fn extract_text_content_reads_text_from_content_array_without_unwrap() {
+        let content = json!([
+            { "type": "input_text", "text": "第一段" },
+            { "type": "output_text", "text": "第二段" },
+            { "type": "input_image", "image_url": "data:image/png;base64,aGVsbG8=" }
+        ]);
+
+        assert_eq!(extract_text_content(Some(&content)), "第一段\n第二段");
     }
 
     #[test]

@@ -78,6 +78,12 @@ fn calculate_client_id_hash(start_url: &str) -> String {
     hex::encode(hasher.finalize())
 }
 
+fn resolve_builder_client_id_hash(client_id_hash: Option<String>, start_url: Option<&str>) -> String {
+    client_id_hash.unwrap_or_else(|| {
+        calculate_client_id_hash(start_url.unwrap_or("https://view.awsapps.com/start"))
+    })
+}
+
 // ===== 数据结构 =====
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -1175,13 +1181,10 @@ async fn add_account_by_idc_internal(
         let email = new_email.ok_or("BuilderId 账号缺少 email")?;
 
         // 计算 client_id_hash（可选）
-        let client_id_hash = if let Some(hash) = params.client_id_hash {
-            Some(hash) // 如果提供了 clientIdHash，直接使用
-        } else if params.start_url.is_some() {
-            Some(calculate_client_id_hash(params.start_url.as_ref().unwrap())) // 如果提供了 startUrl，计算
-        } else {
-            Some(calculate_client_id_hash("https://view.awsapps.com/start")) // BuilderId 使用默认 URL
-        };
+        let client_id_hash = Some(resolve_builder_client_id_hash(
+            params.client_id_hash,
+            params.start_url.as_deref(),
+        ));
 
         let mut store = state.store.lock().expect("Failed to acquire store lock");
         let existing_idx = find_existing_account_idx(
@@ -1473,7 +1476,8 @@ mod tests {
     use super::{
         build_list_available_models_url, clear_available_models_cache,
         ensure_default_model_present, is_available_models_cache_fresh, mark_default_model,
-        read_available_models_cache, sort_available_models_for_display,
+        read_available_models_cache, resolve_builder_client_id_hash,
+        sort_available_models_for_display,
         write_available_models_cache, AvailableModel, ListAvailableModelsResponse,
         AVAILABLE_MODELS_CACHE_TTL_SECONDS,
     };
@@ -1876,5 +1880,33 @@ mod tests {
             .expect("cache write should succeed");
 
         assert!(read_available_models_cache(&account, None, true).is_none());
+    }
+
+    #[test]
+    fn resolve_builder_client_id_hash_prefers_explicit_hash() {
+        let resolved = resolve_builder_client_id_hash(
+            Some("provided-hash".to_string()),
+            Some("https://example.awsapps.com/start"),
+        );
+
+        assert_eq!(resolved, "provided-hash");
+    }
+
+    #[test]
+    fn resolve_builder_client_id_hash_uses_start_url_when_hash_missing() {
+        let start_url = "https://example.awsapps.com/start";
+        let resolved = resolve_builder_client_id_hash(None, Some(start_url));
+
+        assert_eq!(resolved, super::calculate_client_id_hash(start_url));
+    }
+
+    #[test]
+    fn resolve_builder_client_id_hash_falls_back_to_default_start_url() {
+        let resolved = resolve_builder_client_id_hash(None, None);
+
+        assert_eq!(
+            resolved,
+            super::calculate_client_id_hash("https://view.awsapps.com/start")
+        );
     }
 }

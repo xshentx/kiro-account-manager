@@ -4,8 +4,9 @@ use crate::account::Account;
 use crate::kiro_cli_db::read_kiro_cli_accounts;
 use crate::kiro_portal_client::KiroPortalClient;
 use crate::state::AppState;
-use tauri::State;
 use serde::Serialize;
+use std::sync::{Mutex, MutexGuard};
+use tauri::State;
 
 /// 展开路径中的 ~ 为用户主目录
 fn expand_home_dir(path: &str) -> Result<String, String> {
@@ -67,6 +68,12 @@ fn create_account_label(
         existing_account
             .map_or_else(|| format!("从 kiro-cli 导入 ({token_key})"), |a| a.label.clone())
     }
+}
+
+fn lock_account_store<T>(mutex: &Mutex<T>) -> Result<MutexGuard<'_, T>, String> {
+    mutex
+        .lock()
+        .map_err(|_| "Failed to acquire store lock".to_string())
 }
 
 #[derive(Serialize)]
@@ -187,7 +194,7 @@ pub async fn import_from_kiro_cli(
     };
 
     // 3. 检查账号是否已存在
-    let mut store = state.store.lock().unwrap();
+    let mut store = lock_account_store(&state.store)?;
     let existing_index = find_existing_account(&store.accounts, user_id.as_ref(), email.as_ref());
     let is_new = existing_index.is_none();
 
@@ -254,4 +261,22 @@ pub async fn import_from_kiro_cli(
         account: Some(account),
         error: None,
     })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::lock_account_store;
+    use std::sync::Mutex;
+
+    #[test]
+    fn lock_account_store_returns_error_when_mutex_is_poisoned() {
+        let mutex = Mutex::new(());
+        let _ = std::panic::catch_unwind(|| {
+            let _guard = mutex.lock().expect("mutex should lock before poison");
+            panic!("poison lock");
+        });
+
+        let err = lock_account_store(&mutex).expect_err("poisoned mutex should return error");
+        assert!(err.contains("store lock"));
+    }
 }

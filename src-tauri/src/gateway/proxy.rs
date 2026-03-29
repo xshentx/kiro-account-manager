@@ -91,6 +91,25 @@ type UpstreamRequestError = (StatusCode, &'static str, String, Option<String>);
 const MAX_LOG_BODY_CHARS: usize = 20_000;
 const STREAMING_RESPONSE_PLACEHOLDER: &str = "[streaming response omitted from request log]";
 
+#[derive(Debug, Clone)]
+struct RequestLogContext<'a> {
+    request_index: u64,
+    endpoint: &'a str,
+    client_addr: SocketAddr,
+    request: Option<&'a NormalizedRequest>,
+    upstream: Option<&'a UpstreamCredentials>,
+    started_at: Instant,
+    request_body: Option<&'a str>,
+}
+
+#[derive(Debug, Clone, Copy)]
+struct GatewayErrorDetails<'a> {
+    status: StatusCode,
+    error_type: &'static str,
+    message: &'a str,
+    response_body: Option<&'a str>,
+}
+
 pub async fn models_handler() -> impl IntoResponse {
     Json(ModelsResponse {
         object: "list".to_string(),
@@ -142,33 +161,31 @@ fn prepare_logged_body(body: &str) -> Option<String> {
 }
 
 fn write_request_log(
-    request_index: u64,
-    endpoint: &str,
-    client_addr: SocketAddr,
-    request: Option<&NormalizedRequest>,
-    upstream: Option<&UpstreamCredentials>,
+    context: &RequestLogContext<'_>,
     status: StatusCode,
     outcome: &str,
-    started_at: Instant,
     error: Option<&str>,
-    request_body: Option<&str>,
     response_body: Option<&str>,
 ) {
-    let duration_ms = started_at.elapsed().as_millis().min(u128::from(u64::MAX)) as u64;
+    let duration_ms = context
+        .started_at
+        .elapsed()
+        .as_millis()
+        .min(u128::from(u64::MAX)) as u64;
     let entry = GatewayRequestLogEntry {
         occurred_at: Local::now().format("%Y-%m-%d %H:%M:%S").to_string(),
-        request_index,
-        endpoint: endpoint.to_string(),
-        client_ip: client_addr.ip().to_string(),
-        model: request.map(|item| item.model.clone()),
-        stream: request.map(|item| item.stream).unwrap_or(false),
-        upstream_source: upstream.map(|item| item.source_label.clone()),
-        region: upstream.map(|item| item.region.clone()),
+        request_index: context.request_index,
+        endpoint: context.endpoint.to_string(),
+        client_ip: context.client_addr.ip().to_string(),
+        model: context.request.map(|item| item.model.clone()),
+        stream: context.request.map(|item| item.stream).unwrap_or(false),
+        upstream_source: context.upstream.map(|item| item.source_label.clone()),
+        region: context.upstream.map(|item| item.region.clone()),
         status_code: status.as_u16(),
         outcome: outcome.to_string(),
         duration_ms,
         error: error.map(str::to_string),
-        request_body: request_body.and_then(prepare_logged_body),
+        request_body: context.request_body.and_then(prepare_logged_body),
         response_body: response_body.and_then(prepare_logged_body),
     };
     let _ = append_gateway_request_log(&entry);
@@ -201,38 +218,26 @@ fn build_gateway_error_body(
 async fn gateway_error_with_log(
     state: &RouterState,
     format: ResponseFormat,
-    request_index: u64,
-    endpoint: &str,
-    client_addr: SocketAddr,
-    request: Option<&NormalizedRequest>,
-    upstream: Option<&UpstreamCredentials>,
-    started_at: Instant,
-    status: StatusCode,
-    error_type: &'static str,
-    message: &str,
-    request_body: Option<&str>,
-    response_body: Option<&str>,
+    context: &RequestLogContext<'_>,
+    error: GatewayErrorDetails<'_>,
 ) -> Response {
-    *state.last_error.lock().await = Some(message.to_string());
-    let logged_response_body = response_body.map(str::to_string).or_else(|| {
+    *state.last_error.lock().await = Some(error.message.to_string());
+    let logged_response_body = error.response_body.map(str::to_string).or_else(|| {
         Some(serialize_logged_value(&build_gateway_error_body(
-            format, status, error_type, message,
+            format,
+            error.status,
+            error.error_type,
+            error.message,
         )))
     });
     write_request_log(
-        request_index,
-        endpoint,
-        client_addr,
-        request,
-        upstream,
-        status,
+        context,
+        error.status,
         "error",
-        started_at,
-        Some(message),
-        request_body,
+        Some(error.message),
         logged_response_body.as_deref(),
     );
-    gateway_error_response(format, status, error_type, message)
+    gateway_error_response(format, error.status, error.error_type, error.message)
 }
 
 pub async fn proxy_handler(
@@ -248,23 +253,28 @@ pub async fn proxy_handler(
     let endpoint = request_endpoint(format);
     let started_at = Instant::now();
     let raw_request_body = payload.to_string();
+    let base_log_context = RequestLogContext {
+        request_index,
+        endpoint,
+        client_addr,
+        request: None,
+        upstream: None,
+        started_at,
+        request_body: Some(raw_request_body.as_str()),
+    };
 
     if state.config.local_only && !client_addr.ip().is_loopback() {
         let message = format!("已拒绝来自非本机地址的访问: {}", client_addr.ip());
         return gateway_error_with_log(
             &state,
             format,
-            request_index,
-            endpoint,
-            client_addr,
-            None,
-            None,
-            started_at,
-            StatusCode::FORBIDDEN,
-            "permission_error",
-            &message,
-            Some(raw_request_body.as_str()),
-            None,
+            &base_log_context,
+            GatewayErrorDetails {
+                status: StatusCode::FORBIDDEN,
+                error_type: "permission_error",
+                message: &message,
+                response_body: None,
+            },
         )
         .await;
     }
@@ -276,17 +286,13 @@ pub async fn proxy_handler(
         return gateway_error_with_log(
             &state,
             format,
-            request_index,
-            endpoint,
-            client_addr,
-            None,
-            None,
-            started_at,
-            StatusCode::FORBIDDEN,
-            "permission_error",
-            &message,
-            Some(raw_request_body.as_str()),
-            None,
+            &base_log_context,
+            GatewayErrorDetails {
+                status: StatusCode::FORBIDDEN,
+                error_type: "permission_error",
+                message: &message,
+                response_body: None,
+            },
         )
         .await;
     }
@@ -296,17 +302,13 @@ pub async fn proxy_handler(
         return gateway_error_with_log(
             &state,
             format,
-            request_index,
-            endpoint,
-            client_addr,
-            None,
-            None,
-            started_at,
-            StatusCode::UNAUTHORIZED,
-            "authentication_error",
-            &sanitized,
-            Some(raw_request_body.as_str()),
-            None,
+            &base_log_context,
+            GatewayErrorDetails {
+                status: StatusCode::UNAUTHORIZED,
+                error_type: "authentication_error",
+                message: &sanitized,
+                response_body: None,
+            },
         )
         .await;
     }
@@ -318,43 +320,43 @@ pub async fn proxy_handler(
             return gateway_error_with_log(
                 &state,
                 format,
-                request_index,
-                endpoint,
-                client_addr,
-                None,
-                None,
-                started_at,
-                StatusCode::BAD_REQUEST,
-                "invalid_request_error",
-                &sanitized,
-                Some(raw_request_body.as_str()),
-                None,
+                &base_log_context,
+                GatewayErrorDetails {
+                    status: StatusCode::BAD_REQUEST,
+                    error_type: "invalid_request_error",
+                    message: &sanitized,
+                    response_body: None,
+                },
             )
             .await;
         }
+    };
+    let request_log_context = RequestLogContext {
+        request: Some(&request),
+        ..base_log_context.clone()
     };
 
     let upstream = match resolve_upstream_credentials(&state.config, request_index).await {
         Ok(creds) => creds,
         Err(message) => {
             let sanitized = sanitize_error(&message);
-            return gateway_error_with_log(
-                &state,
-                format,
-                request_index,
-                endpoint,
-                client_addr,
-                Some(&request),
-                None,
-                started_at,
-                StatusCode::UNAUTHORIZED,
-                "authentication_error",
-                &sanitized,
-                Some(raw_request_body.as_str()),
-                None,
-            )
-            .await;
+                return gateway_error_with_log(
+                    &state,
+                    format,
+                    &request_log_context,
+                    GatewayErrorDetails {
+                        status: StatusCode::UNAUTHORIZED,
+                        error_type: "authentication_error",
+                        message: &sanitized,
+                        response_body: None,
+                    },
+                )
+                .await;
         }
+    };
+    let upstream_log_context = RequestLogContext {
+        upstream: Some(&upstream),
+        ..request_log_context.clone()
     };
 
     if has_server_web_search_tool(&request) {
@@ -364,17 +366,13 @@ pub async fn proxy_handler(
                 return gateway_error_with_log(
                     &state,
                     format,
-                    request_index,
-                    endpoint,
-                    client_addr,
-                    Some(&request),
-                    Some(&upstream),
-                    started_at,
-                    status,
-                    error_type,
-                    &message,
-                    Some(raw_request_body.as_str()),
-                    None,
+                    &upstream_log_context,
+                    GatewayErrorDetails {
+                        status,
+                        error_type,
+                        message: &message,
+                        response_body: None,
+                    },
                 )
                 .await;
             }
@@ -382,16 +380,10 @@ pub async fn proxy_handler(
 
         if request.stream {
             write_request_log(
-                request_index,
-                endpoint,
-                client_addr,
-                Some(&request),
-                Some(&upstream),
+                &upstream_log_context,
                 StatusCode::OK,
                 "stream",
-                started_at,
                 None,
-                Some(raw_request_body.as_str()),
                 Some(STREAMING_RESPONSE_PLACEHOLDER),
             );
             return stream_completed_response(format, request.model, outcome);
@@ -411,16 +403,10 @@ pub async fn proxy_handler(
         };
         let response_body = serialize_logged_value(&response);
         write_request_log(
-            request_index,
-            endpoint,
-            client_addr,
-            Some(&request),
-            Some(&upstream),
+            &upstream_log_context,
             StatusCode::OK,
             "success",
-            started_at,
             None,
-            Some(raw_request_body.as_str()),
             Some(response_body.as_str()),
         );
         return Json(response).into_response();
@@ -434,23 +420,23 @@ pub async fn proxy_handler(
                 return gateway_error_with_log(
                     &state,
                     format,
-                    request_index,
-                    endpoint,
-                    client_addr,
-                    Some(&request),
-                    Some(&upstream),
-                    started_at,
-                    StatusCode::BAD_REQUEST,
-                    "invalid_request_error",
-                    &sanitized,
-                    Some(raw_request_body.as_str()),
-                    None,
+                    &upstream_log_context,
+                    GatewayErrorDetails {
+                        status: StatusCode::BAD_REQUEST,
+                        error_type: "invalid_request_error",
+                        message: &sanitized,
+                        response_body: None,
+                    },
                 )
                 .await;
             }
         };
     let upstream_request_body = serde_json::to_string_pretty(&upstream_payload)
         .unwrap_or_else(|_| "[failed to serialize upstream payload]".to_string());
+    let upstream_payload_log_context = RequestLogContext {
+        request_body: Some(upstream_request_body.as_str()),
+        ..upstream_log_context.clone()
+    };
 
     let upstream_resp = match send_generate_request(&state.http, &upstream, &upstream_payload).await
     {
@@ -459,17 +445,13 @@ pub async fn proxy_handler(
             return gateway_error_with_log(
                 &state,
                 format,
-                request_index,
-                endpoint,
-                client_addr,
-                Some(&request),
-                Some(&upstream),
-                started_at,
-                status,
-                error_type,
-                &message,
-                Some(upstream_request_body.as_str()),
-                upstream_response_body.as_deref(),
+                &upstream_payload_log_context,
+                GatewayErrorDetails {
+                    status,
+                    error_type,
+                    message: &message,
+                    response_body: upstream_response_body.as_deref(),
+                },
             )
             .await;
         }
@@ -477,16 +459,10 @@ pub async fn proxy_handler(
 
     if request.stream {
         write_request_log(
-            request_index,
-            endpoint,
-            client_addr,
-            Some(&request),
-            Some(&upstream),
+            &upstream_payload_log_context,
             upstream_resp.status(),
             "stream",
-            started_at,
             None,
-            Some(upstream_request_body.as_str()),
             Some(STREAMING_RESPONSE_PLACEHOLDER),
         );
         return stream_proxy_response(upstream_resp, format, request.model);
@@ -499,17 +475,13 @@ pub async fn proxy_handler(
             return gateway_error_with_log(
                 &state,
                 format,
-                request_index,
-                endpoint,
-                client_addr,
-                Some(&request),
-                Some(&upstream),
-                started_at,
-                StatusCode::BAD_GATEWAY,
-                "api_error",
-                &message,
-                Some(upstream_request_body.as_str()),
-                None,
+                &upstream_payload_log_context,
+                GatewayErrorDetails {
+                    status: StatusCode::BAD_GATEWAY,
+                    error_type: "api_error",
+                    message: &message,
+                    response_body: None,
+                },
             )
             .await;
         }
@@ -519,17 +491,13 @@ pub async fn proxy_handler(
         return gateway_error_with_log(
             &state,
             format,
-            request_index,
-            endpoint,
-            client_addr,
-            Some(&request),
-            Some(&upstream),
-            started_at,
-            status,
-            error_type,
-            &message,
-            Some(upstream_request_body.as_str()),
-            Some(body.as_str()),
+            &upstream_payload_log_context,
+            GatewayErrorDetails {
+                status,
+                error_type,
+                message: &message,
+                response_body: Some(body.as_str()),
+            },
         )
         .await;
     }
@@ -540,16 +508,10 @@ pub async fn proxy_handler(
         ResponseFormat::Responses => build_responses_response(&request.model, &aggregated, &[]),
     };
     write_request_log(
-        request_index,
-        endpoint,
-        client_addr,
-        Some(&request),
-        Some(&upstream),
+        &upstream_payload_log_context,
         StatusCode::OK,
         "success",
-        started_at,
         None,
-        Some(upstream_request_body.as_str()),
         Some(body.as_str()),
     );
     Json(response).into_response()
@@ -566,23 +528,28 @@ pub async fn mcp_proxy_handler(
         .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
     let started_at = Instant::now();
     let raw_request_body = payload.to_string();
+    let base_log_context = RequestLogContext {
+        request_index,
+        endpoint: "mcp",
+        client_addr,
+        request: None,
+        upstream: None,
+        started_at,
+        request_body: Some(raw_request_body.as_str()),
+    };
 
     if state.config.local_only && !client_addr.ip().is_loopback() {
         let message = format!("已拒绝来自非本机地址的 MCP 访问: {}", client_addr.ip());
         return gateway_error_with_log(
             &state,
             ResponseFormat::Responses,
-            request_index,
-            "mcp",
-            client_addr,
-            None,
-            None,
-            started_at,
-            StatusCode::FORBIDDEN,
-            "permission_error",
-            &message,
-            Some(raw_request_body.as_str()),
-            None,
+            &base_log_context,
+            GatewayErrorDetails {
+                status: StatusCode::FORBIDDEN,
+                error_type: "permission_error",
+                message: &message,
+                response_body: None,
+            },
         )
         .await;
     }
@@ -594,17 +561,13 @@ pub async fn mcp_proxy_handler(
         return gateway_error_with_log(
             &state,
             ResponseFormat::Responses,
-            request_index,
-            "mcp",
-            client_addr,
-            None,
-            None,
-            started_at,
-            StatusCode::FORBIDDEN,
-            "permission_error",
-            &message,
-            Some(raw_request_body.as_str()),
-            None,
+            &base_log_context,
+            GatewayErrorDetails {
+                status: StatusCode::FORBIDDEN,
+                error_type: "permission_error",
+                message: &message,
+                response_body: None,
+            },
         )
         .await;
     }
@@ -613,17 +576,13 @@ pub async fn mcp_proxy_handler(
         return gateway_error_with_log(
             &state,
             ResponseFormat::Responses,
-            request_index,
-            "mcp",
-            client_addr,
-            None,
-            None,
-            started_at,
-            StatusCode::UNAUTHORIZED,
-            "authentication_error",
-            &sanitized,
-            Some(raw_request_body.as_str()),
-            None,
+            &base_log_context,
+            GatewayErrorDetails {
+                status: StatusCode::UNAUTHORIZED,
+                error_type: "authentication_error",
+                message: &sanitized,
+                response_body: None,
+            },
         )
         .await;
     }
@@ -635,20 +594,20 @@ pub async fn mcp_proxy_handler(
             return gateway_error_with_log(
                 &state,
                 ResponseFormat::Responses,
-                request_index,
-                "mcp",
-                client_addr,
-                None,
-                None,
-                started_at,
-                StatusCode::UNAUTHORIZED,
-                "authentication_error",
-                &sanitized,
-                Some(raw_request_body.as_str()),
-                None,
+                &base_log_context,
+                GatewayErrorDetails {
+                    status: StatusCode::UNAUTHORIZED,
+                    error_type: "authentication_error",
+                    message: &sanitized,
+                    response_body: None,
+                },
             )
             .await;
         }
+    };
+    let upstream_log_context = RequestLogContext {
+        upstream: Some(&upstream),
+        ..base_log_context.clone()
     };
 
     let upstream_url = format!("https://q.{}.amazonaws.com/mcp", upstream.region);
@@ -670,17 +629,13 @@ pub async fn mcp_proxy_handler(
             return gateway_error_with_log(
                 &state,
                 ResponseFormat::Responses,
-                request_index,
-                "mcp",
-                client_addr,
-                None,
-                Some(&upstream),
-                started_at,
-                StatusCode::BAD_GATEWAY,
-                "api_error",
-                &message,
-                Some(raw_request_body.as_str()),
-                None,
+                &upstream_log_context,
+                GatewayErrorDetails {
+                    status: StatusCode::BAD_GATEWAY,
+                    error_type: "api_error",
+                    message: &message,
+                    response_body: None,
+                },
             )
             .await;
         }
@@ -695,17 +650,13 @@ pub async fn mcp_proxy_handler(
             return gateway_error_with_log(
                 &state,
                 ResponseFormat::Responses,
-                request_index,
-                "mcp",
-                client_addr,
-                None,
-                Some(&upstream),
-                started_at,
-                StatusCode::BAD_GATEWAY,
-                "api_error",
-                &message,
-                Some(raw_request_body.as_str()),
-                None,
+                &upstream_log_context,
+                GatewayErrorDetails {
+                    status: StatusCode::BAD_GATEWAY,
+                    error_type: "api_error",
+                    message: &message,
+                    response_body: None,
+                },
             )
             .await;
         }
@@ -717,17 +668,13 @@ pub async fn mcp_proxy_handler(
         return gateway_error_with_log(
             &state,
             ResponseFormat::Responses,
-            request_index,
-            "mcp",
-            client_addr,
-            None,
-            Some(&upstream),
-            started_at,
-            mapped_status,
-            error_type,
-            &message,
-            Some(raw_request_body.as_str()),
-            Some(body_text.as_str()),
+            &upstream_log_context,
+            GatewayErrorDetails {
+                status: mapped_status,
+                error_type,
+                message: &message,
+                response_body: Some(body_text.as_str()),
+            },
         )
         .await;
     }
@@ -744,16 +691,10 @@ pub async fn mcp_proxy_handler(
 
     let logged_response_body = String::from_utf8_lossy(&body).to_string();
     write_request_log(
-        request_index,
-        "mcp",
-        client_addr,
-        None,
-        Some(&upstream),
+        &upstream_log_context,
         status,
         "success",
-        started_at,
         None,
-        Some(raw_request_body.as_str()),
         Some(logged_response_body.as_str()),
     );
     builder.body(Body::from(body)).unwrap_or_else(|error| {
