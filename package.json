@@ -13,7 +13,7 @@
   "scripts": {
     "dev": "vite",
     "build": "vite build",
-    "build:release": "pwsh -NoLogo -NoProfile -File ./scripts/build-release.ps1",
+    "build:release": "pwsh -NoLogo -NoProfile -ExecutionPolicy Bypass -File ./scripts/build-release.ps1",
     "preview": "vite preview",
     "tauri": "tauri",
     "extract": "lingui extract",
@@ -22,7 +22,7 @@
     "release:minor": "standard-version --release-as minor",
     "release:major": "standard-version --release-as major",
     "release:patch": "standard-version --release-as patch",
-    "publish": "pwsh scripts/release.ps1"
+    "release:check": "pwsh -NoLogo -NoProfile -ExecutionPolicy Bypass -File ./scripts/check-release-pipeline.ps1"
   },
   "dependencies": {
     "@headlessui/react": "2.2.9",

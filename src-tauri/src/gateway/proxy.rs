@@ -112,14 +112,15 @@ struct GatewayErrorDetails<'a> {
     response_body: Option<&'a str>,
 }
 
-pub async fn models_handler() -> impl IntoResponse {
-    Json(ModelsResponse {
+fn build_models_response() -> Value {
+    serde_json::to_value(ModelsResponse {
         object: "list".to_string(),
         data: get_available_models(),
     })
+    .unwrap_or_else(|_| json!({ "object": "list", "data": [] }))
 }
 
-pub async fn count_tokens_handler(payload: Value) -> impl IntoResponse {
+fn build_count_tokens_response(payload: &Value) -> Value {
     let mut chars = 0usize;
     if let Some(messages) = payload.get("messages").and_then(Value::as_array) {
         for message in messages {
@@ -129,7 +130,143 @@ pub async fn count_tokens_handler(payload: Value) -> impl IntoResponse {
     if let Some(input) = payload.get("input") {
         chars += extract_plain_text(Some(input)).chars().count();
     }
-    Json(json!({ "input_tokens": (chars / 4).max(1) }))
+    json!({ "input_tokens": (chars / 4).max(1) })
+}
+
+fn build_health_response() -> Value {
+    json!({ "ok": true })
+}
+
+async fn guarded_local_response(
+    state: RouterState,
+    client_addr: SocketAddr,
+    headers: HeaderMap,
+    endpoint: &'static str,
+    request_body: Option<&str>,
+    response_body: Value,
+) -> Response {
+    let request_index = state
+        .request_count
+        .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+    let started_at = Instant::now();
+    let log_context = RequestLogContext {
+        request_index,
+        endpoint,
+        client_addr,
+        request: None,
+        upstream: None,
+        started_at,
+        request_body,
+    };
+
+    if state.config.local_only && !client_addr.ip().is_loopback() {
+        let message = format!("已拒绝来自非本机地址的访问: {}", client_addr.ip());
+        return gateway_error_with_log(
+            &state,
+            ResponseFormat::Responses,
+            &log_context,
+            GatewayErrorDetails {
+                status: StatusCode::FORBIDDEN,
+                error_type: "permission_error",
+                message: &message,
+                response_body: None,
+            },
+        )
+        .await;
+    }
+    if !state.config.local_only
+        && !state.config.allowed_ips.is_empty()
+        && !ip_matches_allowlist(client_addr.ip(), &state.config.allowed_ips)
+    {
+        let message = format!("访问地址 {} 不在网关白名单中", client_addr.ip());
+        return gateway_error_with_log(
+            &state,
+            ResponseFormat::Responses,
+            &log_context,
+            GatewayErrorDetails {
+                status: StatusCode::FORBIDDEN,
+                error_type: "permission_error",
+                message: &message,
+                response_body: None,
+            },
+        )
+        .await;
+    }
+    if let Err(message) = verify_client_auth(&headers, &state.config) {
+        let sanitized = sanitize_error(&message);
+        return gateway_error_with_log(
+            &state,
+            ResponseFormat::Responses,
+            &log_context,
+            GatewayErrorDetails {
+                status: StatusCode::UNAUTHORIZED,
+                error_type: "authentication_error",
+                message: &sanitized,
+                response_body: None,
+            },
+        )
+        .await;
+    }
+
+    let serialized = serialize_logged_value(&response_body);
+    write_request_log(
+        &log_context,
+        StatusCode::OK,
+        "success",
+        None,
+        Some(serialized.as_str()),
+    );
+    Json(response_body).into_response()
+}
+
+pub async fn health_handler(
+    state: RouterState,
+    client_addr: SocketAddr,
+    headers: HeaderMap,
+) -> Response {
+    guarded_local_response(
+        state,
+        client_addr,
+        headers,
+        "health",
+        None,
+        build_health_response(),
+    )
+    .await
+}
+
+pub async fn models_handler(
+    state: RouterState,
+    client_addr: SocketAddr,
+    headers: HeaderMap,
+) -> Response {
+    guarded_local_response(
+        state,
+        client_addr,
+        headers,
+        "models",
+        None,
+        build_models_response(),
+    )
+    .await
+}
+
+pub async fn count_tokens_handler(
+    state: RouterState,
+    client_addr: SocketAddr,
+    headers: HeaderMap,
+    payload: Value,
+) -> Response {
+    let request_body = payload.to_string();
+    guarded_local_response(
+        state,
+        client_addr,
+        headers,
+        "count_tokens",
+        Some(request_body.as_str()),
+        build_count_tokens_response(&payload),
+    )
+    .await
 }
 
 fn request_endpoint(format: ResponseFormat) -> &'static str {

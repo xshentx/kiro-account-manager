@@ -7,13 +7,13 @@ mod thinking_parser;
 use axum::{
     extract::{ConnectInfo, State},
     http::HeaderMap,
-    response::{IntoResponse, Json, Response},
+    response::{Json, Response},
     routing::{get, post},
     Router,
 };
 use reqwest::Client;
 use serde::{Deserialize, Serialize};
-use serde_json::{json, Value};
+use serde_json::Value;
 use std::{
     fs,
     io::{BufRead, BufReader, Write},
@@ -593,16 +593,29 @@ pub fn open_gateway_log_dir(app: &AppHandle) -> Result<String, String> {
     Ok(dir.to_string_lossy().to_string())
 }
 
-async fn health_handler() -> impl IntoResponse {
-    Json(json!({ "ok": true }))
+async fn health_handler(
+    ConnectInfo(addr): ConnectInfo<SocketAddr>,
+    State(state): State<RouterState>,
+    headers: HeaderMap,
+) -> Response {
+    proxy::health_handler(state, addr, headers).await
 }
 
-async fn models_handler() -> impl IntoResponse {
-    proxy::models_handler().await
+async fn models_handler(
+    ConnectInfo(addr): ConnectInfo<SocketAddr>,
+    State(state): State<RouterState>,
+    headers: HeaderMap,
+) -> Response {
+    proxy::models_handler(state, addr, headers).await
 }
 
-async fn count_tokens_handler(Json(payload): Json<Value>) -> impl IntoResponse {
-    proxy::count_tokens_handler(payload).await
+async fn count_tokens_handler(
+    ConnectInfo(addr): ConnectInfo<SocketAddr>,
+    State(state): State<RouterState>,
+    headers: HeaderMap,
+    Json(payload): Json<Value>,
+) -> Response {
+    proxy::count_tokens_handler(state, addr, headers, payload).await
 }
 
 async fn messages_handler(
@@ -803,6 +816,17 @@ mod tests {
         }
     }
 
+    fn runtime_test_gateway_config(port: u16) -> GatewayConfig {
+        GatewayConfig {
+            port,
+            local_only: false,
+            account_mode: "single".to_string(),
+            account_id: Some("test-account".to_string()),
+            access_token: Some("sk-test".to_string()),
+            ..GatewayConfig::default()
+        }
+    }
+
     #[tokio::test]
     async fn health_route_is_reachable() {
         let app = router(test_router_state());
@@ -817,7 +841,7 @@ mod tests {
             .await
             .expect("router should respond");
 
-        assert_eq!(response.status(), StatusCode::OK);
+        assert_ne!(response.status(), StatusCode::NOT_FOUND);
     }
 
     #[tokio::test]
@@ -963,14 +987,98 @@ mod tests {
             .port();
         drop(listener);
 
-        let config = GatewayConfig {
-            port,
-            local_only: false,
-            account_mode: "single".to_string(),
-            account_id: Some("test-account".to_string()),
-            access_token: Some("sk-test".to_string()),
-            ..GatewayConfig::default()
-        };
+        let config = runtime_test_gateway_config(port);
+        let mut runtime = spawn_runtime(config).await.expect("runtime should start");
+
+        let response = reqwest::Client::new()
+            .get(format!("http://127.0.0.1:{port}/health"))
+            .bearer_auth("sk-test")
+            .send()
+            .await
+            .expect("health request should succeed");
+
+        assert_eq!(response.status(), StatusCode::OK);
+        stop_runtime(&mut runtime).await;
+    }
+
+    #[tokio::test]
+    async fn runtime_serves_models_over_real_http() {
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").expect("listener should bind");
+        let port = listener
+            .local_addr()
+            .expect("local addr should resolve")
+            .port();
+        drop(listener);
+
+        let config = runtime_test_gateway_config(port);
+        let mut runtime = spawn_runtime(config).await.expect("runtime should start");
+
+        let response = reqwest::Client::new()
+            .get(format!("http://127.0.0.1:{port}/v1/models"))
+            .bearer_auth("sk-test")
+            .send()
+            .await
+            .expect("models request should succeed");
+
+        assert_eq!(response.status(), StatusCode::OK);
+        let payload: Value = response.json().await.expect("models response should be json");
+        assert_eq!(payload.get("object").and_then(Value::as_str), Some("list"));
+        assert!(
+            payload
+                .get("data")
+                .and_then(Value::as_array)
+                .is_some_and(|items| !items.is_empty()),
+            "models response should include at least one model"
+        );
+        stop_runtime(&mut runtime).await;
+    }
+
+    #[tokio::test]
+    async fn runtime_serves_count_tokens_over_real_http() {
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").expect("listener should bind");
+        let port = listener
+            .local_addr()
+            .expect("local addr should resolve")
+            .port();
+        drop(listener);
+
+        let config = runtime_test_gateway_config(port);
+        let mut runtime = spawn_runtime(config).await.expect("runtime should start");
+
+        let response = reqwest::Client::new()
+            .post(format!("http://127.0.0.1:{port}/v1/messages/count_tokens"))
+            .bearer_auth("sk-test")
+            .header("content-type", "application/json")
+            .body(
+                json!({
+                    "model": "claude-sonnet-4-5-20250929",
+                    "messages": [{ "role": "user", "content": "hello world" }]
+                })
+                .to_string(),
+            )
+            .send()
+            .await
+            .expect("count tokens request should succeed");
+
+        assert_eq!(response.status(), StatusCode::OK);
+        let payload: Value = response
+            .json()
+            .await
+            .expect("count tokens response should be json");
+        assert_eq!(payload.get("input_tokens").and_then(Value::as_u64), Some(2));
+        stop_runtime(&mut runtime).await;
+    }
+
+    #[tokio::test]
+    async fn runtime_rejects_unauthenticated_health_requests_over_real_http() {
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").expect("listener should bind");
+        let port = listener
+            .local_addr()
+            .expect("local addr should resolve")
+            .port();
+        drop(listener);
+
+        let config = runtime_test_gateway_config(port);
         let mut runtime = spawn_runtime(config).await.expect("runtime should start");
 
         let response = reqwest::Client::new()
@@ -979,7 +1087,59 @@ mod tests {
             .await
             .expect("health request should succeed");
 
-        assert_eq!(response.status(), StatusCode::OK);
+        assert_eq!(response.status(), StatusCode::UNAUTHORIZED);
+        stop_runtime(&mut runtime).await;
+    }
+
+    #[tokio::test]
+    async fn runtime_rejects_unauthenticated_models_requests_over_real_http() {
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").expect("listener should bind");
+        let port = listener
+            .local_addr()
+            .expect("local addr should resolve")
+            .port();
+        drop(listener);
+
+        let config = runtime_test_gateway_config(port);
+        let mut runtime = spawn_runtime(config).await.expect("runtime should start");
+
+        let response = reqwest::Client::new()
+            .get(format!("http://127.0.0.1:{port}/v1/models"))
+            .send()
+            .await
+            .expect("models request should succeed");
+
+        assert_eq!(response.status(), StatusCode::UNAUTHORIZED);
+        stop_runtime(&mut runtime).await;
+    }
+
+    #[tokio::test]
+    async fn runtime_rejects_unauthenticated_count_tokens_requests_over_real_http() {
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").expect("listener should bind");
+        let port = listener
+            .local_addr()
+            .expect("local addr should resolve")
+            .port();
+        drop(listener);
+
+        let config = runtime_test_gateway_config(port);
+        let mut runtime = spawn_runtime(config).await.expect("runtime should start");
+
+        let response = reqwest::Client::new()
+            .post(format!("http://127.0.0.1:{port}/v1/messages/count_tokens"))
+            .header("content-type", "application/json")
+            .body(
+                json!({
+                    "model": "claude-sonnet-4-5-20250929",
+                    "input": [{ "role": "user", "content": "hello" }]
+                })
+                .to_string(),
+            )
+            .send()
+            .await
+            .expect("count tokens request should succeed");
+
+        assert_eq!(response.status(), StatusCode::UNAUTHORIZED);
         stop_runtime(&mut runtime).await;
     }
 
@@ -992,14 +1152,7 @@ mod tests {
             .port();
         drop(listener);
 
-        let config = GatewayConfig {
-            port,
-            local_only: false,
-            account_mode: "single".to_string(),
-            account_id: Some("test-account".to_string()),
-            access_token: Some("sk-test".to_string()),
-            ..GatewayConfig::default()
-        };
+        let config = runtime_test_gateway_config(port);
         let mut runtime = spawn_runtime(config).await.expect("runtime should start");
 
         let response = reqwest::Client::new()
@@ -1015,6 +1168,68 @@ mod tests {
             .send()
             .await
             .expect("responses request should succeed");
+
+        assert_eq!(response.status(), StatusCode::UNAUTHORIZED);
+        stop_runtime(&mut runtime).await;
+    }
+
+    #[tokio::test]
+    async fn runtime_rejects_unauthenticated_messages_requests_over_real_http() {
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").expect("listener should bind");
+        let port = listener
+            .local_addr()
+            .expect("local addr should resolve")
+            .port();
+        drop(listener);
+
+        let config = runtime_test_gateway_config(port);
+        let mut runtime = spawn_runtime(config).await.expect("runtime should start");
+
+        let response = reqwest::Client::new()
+            .post(format!("http://127.0.0.1:{port}/messages"))
+            .header("content-type", "application/json")
+            .body(
+                json!({
+                    "model": "claude-sonnet-4-5-20250929",
+                    "messages": [{ "role": "user", "content": "hello" }]
+                })
+                .to_string(),
+            )
+            .send()
+            .await
+            .expect("messages request should succeed");
+
+        assert_eq!(response.status(), StatusCode::UNAUTHORIZED);
+        stop_runtime(&mut runtime).await;
+    }
+
+    #[tokio::test]
+    async fn runtime_rejects_unauthenticated_mcp_requests_over_real_http() {
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").expect("listener should bind");
+        let port = listener
+            .local_addr()
+            .expect("local addr should resolve")
+            .port();
+        drop(listener);
+
+        let config = runtime_test_gateway_config(port);
+        let mut runtime = spawn_runtime(config).await.expect("runtime should start");
+
+        let response = reqwest::Client::new()
+            .post(format!("http://127.0.0.1:{port}/mcp"))
+            .header("content-type", "application/json")
+            .body(
+                json!({
+                    "jsonrpc": "2.0",
+                    "id": 1,
+                    "method": "tools/list",
+                    "params": {}
+                })
+                .to_string(),
+            )
+            .send()
+            .await
+            .expect("mcp request should succeed");
 
         assert_eq!(response.status(), StatusCode::UNAUTHORIZED);
         stop_runtime(&mut runtime).await;

@@ -12,7 +12,7 @@
 - 前端单独：`npm run dev`、`npm run build`、`npm run preview`。
 - 后端单独（进入 `src-tauri/`）：`cargo build`、`cargo test`、`cargo clippy`。
 - 发行构建：`npm run tauri build`；版本号保持 `package.json`、`src-tauri/Cargo.toml`、`src-tauri/tauri.conf.json` 三处同步。
-- 版本管理：`npm run release:(patch|minor|major)` 生成 changelog；`npm run publish` 调用 `scripts/release.ps1`。
+- 版本管理：`npm run release:(patch|minor|major)` 生成 changelog；本地正式打包使用 `npm run build:release`（调用 `scripts/build-release.ps1`）。
 - i18n：`npm run extract` / `npm run compile`（Lingui）。
 
 ## Coding Style & Naming Conventions

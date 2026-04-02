@@ -28,11 +28,11 @@ npm run tauri build      # Build distributable app for current platform
 npm run extract          # Extract translatable strings
 npm run compile          # Compile translations
 
-# Release (uses standard-version + PowerShell script)
+# Release / local package
 npm run release:patch    # 1.8.1 -> 1.8.2
 npm run release:minor    # 1.8.1 -> 1.9.0
 npm run release:major    # 1.8.1 -> 2.0.0
-npm run publish          # Run scripts/release.ps1
+npm run build:release    # Run scripts/build-release.ps1
 ```
 
 **Version sync**: The version number must stay in sync across three files: `package.json`, `src-tauri/Cargo.toml`, and `src-tauri/tauri.conf.json`. The `standard-version` release scripts handle `package.json`; the other two must be updated manually or via the release script.
