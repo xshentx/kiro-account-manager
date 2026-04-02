@@ -1,7 +1,7 @@
 use chrono::{DateTime, Local};
 use serde::{Deserialize, Deserializer, Serialize};
-use uuid::Uuid;
 use std::path::PathBuf;
+use uuid::Uuid;
 
 // 自定义反序列化：处理 tag_links 的 null 值
 fn deserialize_tag_links<'de, D>(deserializer: D) -> Result<Vec<AccountTagLink>, D::Error>
@@ -184,7 +184,7 @@ impl Account {
         let now: DateTime<Local> = Local::now();
         Self {
             id: Uuid::new_v4().to_string(),
-            email: None,  // Enterprise 账号没有 email
+            email: None, // Enterprise 账号没有 email
             label,
             status: "active".to_string(),
             added_at: now.format("%Y/%m/%d %H:%M:%S").to_string(),
@@ -219,7 +219,9 @@ impl Account {
     /// 获取显示用的标识（Enterprise 用 `user_id`，其他用 email）
     pub fn get_display_id(&self) -> String {
         if self.is_enterprise() {
-            self.user_id.clone().unwrap_or_else(|| "Unknown".to_string())
+            self.user_id
+                .clone()
+                .unwrap_or_else(|| "Unknown".to_string())
         } else {
             self.email.clone().unwrap_or_else(|| "Unknown".to_string())
         }
@@ -227,11 +229,66 @@ impl Account {
 
     /// 判断账号是否可用（可正常参与切换/同步）
     pub fn is_available(&self) -> bool {
-        !matches!(
-            self.status.as_str(),
-            "banned" | "封禁" | "已封禁" | "invalid" | "失效" | "已失效" | "Token已失效" | "expired" | "过期" | "已过期"
-        )
+        !is_unavailable_status(self.status.as_str()) && !is_usage_capped(self.usage_data.as_ref())
     }
+}
+
+fn is_unavailable_status(status: &str) -> bool {
+    matches!(
+        status,
+        "capped"
+            | "封顶"
+            | "banned"
+            | "封禁"
+            | "已封禁"
+            | "invalid"
+            | "失效"
+            | "已失效"
+            | "Token已失效"
+            | "expired"
+            | "过期"
+            | "已过期"
+    )
+}
+
+fn usage_number(source: &serde_json::Value, integer_key: &str, precise_key: &str) -> Option<f64> {
+    source
+        .get(precise_key)
+        .and_then(serde_json::Value::as_f64)
+        .or_else(|| source.get(integer_key).and_then(serde_json::Value::as_f64))
+}
+
+fn is_usage_capped(usage_data: Option<&serde_json::Value>) -> bool {
+    let Some(usage_data) = usage_data else {
+        return false;
+    };
+
+    let Some(breakdown) = usage_data
+        .get("usageBreakdownList")
+        .and_then(serde_json::Value::as_array)
+        .and_then(|items| items.first())
+    else {
+        return false;
+    };
+
+    if usage_data
+        .get("overageConfiguration")
+        .and_then(|config| config.get("overageStatus"))
+        .and_then(serde_json::Value::as_str)
+        != Some("DISABLED")
+    {
+        return false;
+    }
+
+    let Some(current_usage) = usage_number(breakdown, "currentUsage", "currentUsageWithPrecision")
+    else {
+        return false;
+    };
+    let Some(usage_limit) = usage_number(breakdown, "usageLimit", "usageLimitWithPrecision") else {
+        return false;
+    };
+
+    usage_limit > 0.0 && current_usage >= usage_limit
 }
 
 pub struct AccountStore {
@@ -243,7 +300,10 @@ impl AccountStore {
     pub fn new() -> Self {
         let file_path = Self::get_storage_path();
         let accounts = Self::load_from_file(&file_path);
-        Self { accounts, file_path }
+        Self {
+            accounts,
+            file_path,
+        }
     }
 
     fn get_storage_path() -> PathBuf {
@@ -276,24 +336,28 @@ impl AccountStore {
     }
 
     pub fn save_to_file(&self) -> bool {
+        self.try_save_to_file().is_ok()
+    }
+
+    pub fn try_save_to_file(&self) -> Result<(), String> {
         if let Some(parent) = self.file_path.parent() {
             if let Err(e) = std::fs::create_dir_all(parent) {
                 eprintln!("[AccountStore] 创建目录失败: {e}");
-                return false;
+                return Err(format!("创建账号目录失败: {e}"));
             }
         }
-        
+
         match serde_json::to_string_pretty(&self.accounts) {
             Ok(json) => {
                 if let Err(e) = std::fs::write(&self.file_path, json) {
                     eprintln!("[AccountStore] 写入文件失败: {e}");
-                    return false;
+                    return Err(format!("写入账号文件失败: {e}"));
                 }
-                true
+                Ok(())
             }
             Err(e) => {
                 eprintln!("[AccountStore] 序列化失败: {e}");
-                false
+                Err(format!("序列化账号数据失败: {e}"))
             }
         }
     }
@@ -306,20 +370,24 @@ impl AccountStore {
         self.accounts = Self::load_from_file(&self.file_path);
     }
 
-    pub fn delete(&mut self, id: &str) -> bool {
+    pub fn delete(&mut self, id: &str) -> Result<bool, String> {
         let len_before = self.accounts.len();
         self.accounts.retain(|a| a.id != id);
         let deleted = self.accounts.len() < len_before;
-        if deleted { let _ = self.save_to_file(); }
-        deleted
+        if deleted {
+            self.try_save_to_file()?;
+        }
+        Ok(deleted)
     }
 
-    pub fn delete_many(&mut self, ids: &[String]) -> usize {
+    pub fn delete_many(&mut self, ids: &[String]) -> Result<usize, String> {
         let len_before = self.accounts.len();
         self.accounts.retain(|a| !ids.contains(&a.id));
         let deleted = len_before - self.accounts.len();
-        if deleted > 0 { let _ = self.save_to_file(); }
-        deleted
+        if deleted > 0 {
+            self.try_save_to_file()?;
+        }
+        Ok(deleted)
     }
 
     pub fn import_from_json(&mut self, json: &str) -> Result<usize, String> {
@@ -335,38 +403,37 @@ impl AccountStore {
                             account.auth_method = Some("social".to_string());
                         }
                     }
-                    
+
                     let exists = self.accounts.iter().any(|a| {
                         // 优先用 ID 去重
                         if a.id == account.id {
                             return true;
                         }
-                        
+
                         // 使用 user_id 去重（最简单直接）
                         if let (Some(a_uid), Some(acc_uid)) = (&a.user_id, &account.user_id) {
                             return a_uid == acc_uid;
                         }
-                        
+
                         // 如果没有 user_id，用 email 兜底
                         if let (Some(a_email), Some(acc_email)) = (&a.email, &account.email) {
                             return a_email == acc_email;
                         }
-                        
+
                         false
                     });
-                    
+
                     if !exists {
                         // 如果没有 machine_id，生成一个
                         if account.machine_id.is_none() {
-                            account.machine_id = Some(uuid::Uuid::new_v4().to_string().to_lowercase());
+                            account.machine_id =
+                                Some(uuid::Uuid::new_v4().to_string().to_lowercase());
                         }
                         self.accounts.push(account);
                         added += 1;
                     }
                 }
-                if !self.save_to_file() {
-                    return Err("保存文件失败".to_string());
-                }
+                self.try_save_to_file()?;
                 Ok(added)
             }
             Err(e) => Err(e.to_string()),
@@ -385,14 +452,16 @@ impl AccountStore {
 
     /// 按分组筛选账号
     pub fn get_accounts_by_group(&self, group_id: &str) -> Vec<&Account> {
-        self.accounts.iter()
+        self.accounts
+            .iter()
             .filter(|a| a.group_id.as_deref() == Some(group_id))
             .collect()
     }
 
     /// 按标签筛选账号
     pub fn get_accounts_by_tag(&self, tag_id: &str) -> Vec<&Account> {
-        self.accounts.iter()
+        self.accounts
+            .iter()
             .filter(|a| a.tag_links.iter().any(|l| l.tag_id == tag_id))
             .collect()
     }
@@ -428,7 +497,9 @@ impl GroupTagStore {
                 .unwrap_or_else(|_| ".".to_string());
             PathBuf::from(home)
         });
-        data_dir.join(".kiro-account-manager").join("groups-tags.json")
+        data_dir
+            .join(".kiro-account-manager")
+            .join("groups-tags.json")
     }
 
     fn load_from_file(path: &PathBuf) -> GroupTagData {
@@ -439,24 +510,24 @@ impl GroupTagStore {
         }
     }
 
-    pub fn save_to_file(&self) -> bool {
+    pub fn try_save_to_file(&self) -> Result<(), String> {
         if let Some(parent) = self.file_path.parent() {
             if let Err(e) = std::fs::create_dir_all(parent) {
                 eprintln!("[GroupTagStore] 创建目录失败: {e}");
-                return false;
+                return Err(format!("创建分组标签目录失败: {e}"));
             }
         }
         match serde_json::to_string_pretty(&self.data) {
             Ok(json) => {
                 if let Err(e) = std::fs::write(&self.file_path, json) {
                     eprintln!("[GroupTagStore] 写入文件失败: {e}");
-                    return false;
+                    return Err(format!("写入分组标签文件失败: {e}"));
                 }
-                true
+                Ok(())
             }
             Err(e) => {
                 eprintln!("[GroupTagStore] 序列化失败: {e}");
-                false
+                Err(format!("序列化分组标签数据失败: {e}"))
             }
         }
     }
@@ -466,49 +537,71 @@ impl GroupTagStore {
         self.data.groups.clone()
     }
 
-    pub fn add_group(&mut self, name: String, color: Option<String>) -> Result<AccountGroup, String> {
-        #[allow(clippy::cast_possible_truncation, clippy::cast_possible_wrap)] // 分组数量不会超过 i32 范围
+    pub fn add_group(
+        &mut self,
+        name: String,
+        color: Option<String>,
+    ) -> Result<AccountGroup, String> {
+        #[allow(clippy::cast_possible_truncation, clippy::cast_possible_wrap)]
+        // 分组数量不会超过 i32 范围
         let order = self.data.groups.len() as i32;
         let mut group = AccountGroup::new(name, color);
         group.order = order;
         self.data.groups.push(group.clone());
-        if !self.save_to_file() {
-            return Err("保存分组失败".to_string());
-        }
+        self.try_save_to_file()
+            .map_err(|_| "保存分组失败".to_string())?;
         Ok(group)
     }
 
-    pub fn update_group(&mut self, id: &str, name: Option<String>, color: Option<String>) -> Result<AccountGroup, String> {
-        let group = self.data.groups.iter_mut().find(|g| g.id == id)
+    pub fn update_group(
+        &mut self,
+        id: &str,
+        name: Option<String>,
+        color: Option<String>,
+    ) -> Result<AccountGroup, String> {
+        let group = self
+            .data
+            .groups
+            .iter_mut()
+            .find(|g| g.id == id)
             .ok_or("分组不存在")?;
-        if let Some(n) = name { group.name = n; }
-        if let Some(c) = color { group.color = Some(c); }
-        let result = group.clone();
-        if !self.save_to_file() {
-            return Err("保存分组失败".to_string());
+        if let Some(n) = name {
+            group.name = n;
         }
+        if let Some(c) = color {
+            group.color = Some(c);
+        }
+        let result = group.clone();
+        self.try_save_to_file()
+            .map_err(|_| "保存分组失败".to_string())?;
         Ok(result)
     }
 
-    pub fn delete_group(&mut self, id: &str) -> bool {
+    pub fn delete_group(&mut self, id: &str) -> Result<bool, String> {
         let len_before = self.data.groups.len();
         self.data.groups.retain(|g| g.id != id);
         let deleted = self.data.groups.len() < len_before;
-        if deleted { let _ = self.save_to_file(); }
-        deleted
+        if deleted {
+            self.try_save_to_file()
+                .map_err(|_| "保存分组失败".to_string())?;
+        }
+        Ok(deleted)
     }
 
-    pub fn reorder_groups(&mut self, ids: &[String]) -> bool {
+    pub fn reorder_groups(&mut self, ids: &[String]) -> Result<bool, String> {
         for (order, id) in ids.iter().enumerate() {
             if let Some(group) = self.data.groups.iter_mut().find(|g| &g.id == id) {
-                #[allow(clippy::cast_possible_truncation, clippy::cast_possible_wrap)] // 分组数量不会超过 i32 范围
+                #[allow(clippy::cast_possible_truncation, clippy::cast_possible_wrap)]
+                // 分组数量不会超过 i32 范围
                 {
                     group.order = order as i32;
                 }
             }
         }
         self.data.groups.sort_by_key(|g| g.order);
-        self.save_to_file()
+        self.try_save_to_file()
+            .map_err(|_| "保存分组失败".to_string())?;
+        Ok(true)
     }
 
     // 标签操作
@@ -519,29 +612,67 @@ impl GroupTagStore {
     pub fn add_tag(&mut self, name: String, color: String) -> Result<AccountTag, String> {
         let tag = AccountTag::new(name, color);
         self.data.tags.push(tag.clone());
-        if !self.save_to_file() {
-            return Err("保存标签失败".to_string());
-        }
+        self.try_save_to_file()
+            .map_err(|_| "保存标签失败".to_string())?;
         Ok(tag)
     }
 
-    pub fn update_tag(&mut self, id: &str, name: Option<String>, color: Option<String>) -> Result<AccountTag, String> {
-        let tag = self.data.tags.iter_mut().find(|t| t.id == id)
+    pub fn update_tag(
+        &mut self,
+        id: &str,
+        name: Option<String>,
+        color: Option<String>,
+    ) -> Result<AccountTag, String> {
+        let tag = self
+            .data
+            .tags
+            .iter_mut()
+            .find(|t| t.id == id)
             .ok_or("标签不存在")?;
-        if let Some(n) = name { tag.name = n; }
-        if let Some(c) = color { tag.color = c; }
-        let result = tag.clone();
-        if !self.save_to_file() {
-            return Err("保存标签失败".to_string());
+        if let Some(n) = name {
+            tag.name = n;
         }
+        if let Some(c) = color {
+            tag.color = c;
+        }
+        let result = tag.clone();
+        self.try_save_to_file()
+            .map_err(|_| "保存标签失败".to_string())?;
         Ok(result)
     }
 
-    pub fn delete_tag(&mut self, id: &str) -> bool {
+    pub fn delete_tag(&mut self, id: &str) -> Result<bool, String> {
         let len_before = self.data.tags.len();
         self.data.tags.retain(|t| t.id != id);
         let deleted = self.data.tags.len() < len_before;
-        if deleted { let _ = self.save_to_file(); }
-        deleted
+        if deleted {
+            self.try_save_to_file()
+                .map_err(|_| "保存标签失败".to_string())?;
+        }
+        Ok(deleted)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{is_usage_capped, Account};
+
+    #[test]
+    fn account_is_not_available_when_monthly_usage_is_capped() {
+        let mut account = Account::new("capped@example.com".to_string(), "capped".to_string());
+        account.usage_data = Some(serde_json::json!({
+            "overageConfiguration": {
+                "overageStatus": "DISABLED"
+            },
+            "usageBreakdownList": [
+                {
+                    "currentUsage": 50,
+                    "usageLimit": 50
+                }
+            ]
+        }));
+
+        assert!(is_usage_capped(account.usage_data.as_ref()));
+        assert!(!account.is_available());
     }
 }

@@ -59,7 +59,9 @@ impl AccountSwitcher {
         group_id: Option<String>,
     ) -> Self {
         Self::new(
-            strategy_str.map(SwitchStrategy::from_str).unwrap_or_default(),
+            strategy_str
+                .map(SwitchStrategy::from_str)
+                .unwrap_or_default(),
             threshold.unwrap_or(90),
             group_id,
         )
@@ -67,14 +69,15 @@ impl AccountSwitcher {
 
     /// 检查账号是否需要切换
     pub fn should_switch(&self, account: &Account) -> bool {
-        if is_unavailable_status(&account.status) {
+        if !account.is_available() {
             return true;
         }
 
         // 从 usage_data 中解析配额信息
         if let Some((current, limit)) = extract_usage_totals(account.usage_data.as_ref()) {
             if limit > 0 {
-                #[allow(clippy::cast_precision_loss)] // i64 → f64 转换用于百分比计算，精度损失可接受
+                #[allow(clippy::cast_precision_loss)]
+                // i64 → f64 转换用于百分比计算，精度损失可接受
                 let usage_percent = (current as f64 / limit as f64) * 100.0;
                 return usage_percent >= f64::from(self.threshold);
             }
@@ -84,19 +87,32 @@ impl AccountSwitcher {
     }
 
     /// 选择下一个可用账号
-    pub fn select_next<'a>(&mut self, accounts: &'a [Account], current_id: &str) -> Option<&'a Account> {
-        let available: Vec<&Account> = accounts.iter()
+    pub fn select_next<'a>(
+        &mut self,
+        accounts: &'a [Account],
+        current_id: &str,
+    ) -> Option<&'a Account> {
+        let available: Vec<&Account> = accounts
+            .iter()
             .filter(|a| {
-                if a.id == current_id { return false; }
-                if !a.is_available() { return false; }
+                if a.id == current_id {
+                    return false;
+                }
+                if !a.is_available() {
+                    return false;
+                }
                 if let Some(ref gid) = self.group_id {
-                    if a.group_id.as_ref() != Some(gid) { return false; }
+                    if a.group_id.as_ref() != Some(gid) {
+                        return false;
+                    }
                 }
                 true
             })
             .collect();
 
-        if available.is_empty() { return None; }
+        if available.is_empty() {
+            return None;
+        }
 
         match self.strategy {
             SwitchStrategy::RoundRobin => {
@@ -105,10 +121,13 @@ impl AccountSwitcher {
             }
             SwitchStrategy::MostQuota => {
                 // 选择剩余配额最多的账号
-                available.iter()
+                available
+                    .iter()
                     .max_by_key(|a| {
-                        if let Some((current, limit)) = extract_usage_totals(a.usage_data.as_ref()) {
-                            #[allow(clippy::cast_possible_truncation)] // i64 → i32 转换用于排序，配额值不会超过 i32 范围
+                        if let Some((current, limit)) = extract_usage_totals(a.usage_data.as_ref())
+                        {
+                            #[allow(clippy::cast_possible_truncation)]
+                            // i64 → i32 转换用于排序，配额值不会超过 i32 范围
                             return (limit - current) as i32;
                         }
                         0
@@ -126,15 +145,23 @@ impl AccountSwitcher {
 fn is_unavailable_status(status: &str) -> bool {
     matches!(
         status,
-        "banned" | "封禁" | "已封禁" | "invalid" | "失效" | "已失效" | "Token已失效" | "expired" | "过期" | "已过期"
+        "capped"
+            | "封顶"
+            | "banned"
+            | "封禁"
+            | "已封禁"
+            | "invalid"
+            | "失效"
+            | "已失效"
+            | "Token已失效"
+            | "expired"
+            | "过期"
+            | "已过期"
     )
 }
 
 fn extract_usage_totals(usage_data: Option<&Value>) -> Option<(i64, i64)> {
-    let breakdown = usage_data?
-        .get("usageBreakdownList")?
-        .as_array()?
-        .first()?;
+    let breakdown = usage_data?.get("usageBreakdownList")?.as_array()?.first()?;
 
     let current = breakdown
         .get("currentUsage")
@@ -146,6 +173,47 @@ fn extract_usage_totals(usage_data: Option<&Value>) -> Option<(i64, i64)> {
         .unwrap_or(0);
 
     Some((current, limit))
+}
+
+fn is_usage_capped(usage_data: Option<&Value>) -> bool {
+    let Some(usage_data) = usage_data else {
+        return false;
+    };
+    let Some(breakdown) = usage_data
+        .get("usageBreakdownList")
+        .and_then(Value::as_array)
+        .and_then(|items| items.first())
+    else {
+        return false;
+    };
+
+    let Some(overage_status) = usage_data
+        .get("overageConfiguration")
+        .and_then(|config| config.get("overageStatus"))
+        .and_then(Value::as_str)
+    else {
+        return false;
+    };
+    if overage_status != "DISABLED" {
+        return false;
+    }
+
+    let Some(current) = breakdown
+        .get("currentUsageWithPrecision")
+        .and_then(Value::as_f64)
+        .or_else(|| breakdown.get("currentUsage").and_then(Value::as_f64))
+    else {
+        return false;
+    };
+    let Some(limit) = breakdown
+        .get("usageLimitWithPrecision")
+        .and_then(Value::as_f64)
+        .or_else(|| breakdown.get("usageLimit").and_then(Value::as_f64))
+    else {
+        return false;
+    };
+
+    limit > 0.0 && current >= limit
 }
 
 /// 换号结果
@@ -183,5 +251,38 @@ impl SwitchResult {
             new_account_email: None,
             message: "当前账号配额充足，无需切换".to_string(),
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{is_unavailable_status, is_usage_capped, AccountSwitcher, SwitchStrategy};
+    use crate::account::Account;
+
+    #[test]
+    fn capped_status_is_treated_as_unavailable() {
+        assert!(is_unavailable_status("capped"));
+        assert!(is_unavailable_status("封顶"));
+    }
+
+    #[test]
+    fn capped_usage_requires_switch() {
+        let mut account = Account::new("capped@example.com".to_string(), "capped".to_string());
+        account.usage_data = Some(serde_json::json!({
+            "overageConfiguration": {
+                "overageStatus": "DISABLED"
+            },
+            "usageBreakdownList": [
+                {
+                    "currentUsage": 50,
+                    "usageLimit": 50
+                }
+            ]
+        }));
+
+        let switcher = AccountSwitcher::new(SwitchStrategy::RoundRobin, 90, None);
+
+        assert!(is_usage_capped(account.usage_data.as_ref()));
+        assert!(switcher.should_switch(&account));
     }
 }

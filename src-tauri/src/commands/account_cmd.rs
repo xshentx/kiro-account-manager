@@ -3,24 +3,22 @@
 #![allow(clippy::needless_pass_by_value)] // Tauri 命令需要按值传递 State
 #![allow(clippy::too_many_lines)] // 命令文件包含多个函数
 
-use crate::account::{Account, AvailableModelsCacheEntry};
+use crate::account::Account;
 use crate::auth::{refresh_token_desktop, User};
+use crate::commands::account_models::{
+    clear_available_models_cache, fetch_all_available_models, read_available_models_cache,
+    write_available_models_cache, ListAvailableModelsResponse,
+};
 use crate::commands::common::{
     calc_expires_at, calc_status, extract_user_info, find_existing_account_idx,
     get_usage_by_provider, is_auth_error_message, refresh_token_by_provider, RefreshResult,
-};
-use crate::commands::machine_guid::get_machine_id;
-use crate::http_client::{
-    build_http_client_with_user_agent, build_kiro_custom_user_agent, resolve_kiro_upstream_region,
-    resolve_q_service_endpoint,
 };
 use crate::providers::{AuthProvider, IdcProvider, KiroPortalClient, RefreshMetadata};
 use crate::state::AppState;
 use serde::{Deserialize, Serialize};
 use sha1::{Digest, Sha1};
+use std::sync::{Mutex, MutexGuard};
 use tauri::State;
-
-const AVAILABLE_MODELS_CACHE_TTL_SECONDS: i64 = 30 * 60;
 
 #[derive(Serialize)]
 pub struct SyncAccountResult {
@@ -78,10 +76,23 @@ fn calculate_client_id_hash(start_url: &str) -> String {
     hex::encode(hasher.finalize())
 }
 
-fn resolve_builder_client_id_hash(client_id_hash: Option<String>, start_url: Option<&str>) -> String {
+fn resolve_builder_client_id_hash(
+    client_id_hash: Option<String>,
+    start_url: Option<&str>,
+) -> String {
     client_id_hash.unwrap_or_else(|| {
         calculate_client_id_hash(start_url.unwrap_or("https://view.awsapps.com/start"))
     })
+}
+
+fn lock_store<'a, T>(mutex: &'a Mutex<T>, label: &str) -> Result<MutexGuard<'a, T>, String> {
+    mutex
+        .lock()
+        .map_err(|_| format!("Failed to acquire {label} lock"))
+}
+
+fn save_store(store: &crate::account::AccountStore) -> Result<(), String> {
+    store.try_save_to_file()
 }
 
 // ===== 数据结构 =====
@@ -117,262 +128,6 @@ pub struct VerifyAccountParams {
     pub region: Option<String>,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase")]
-pub struct AvailableModelTokenLimits {
-    pub max_input_tokens: Option<i64>,
-    pub max_output_tokens: Option<i64>,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase")]
-pub struct AvailableModelPromptCaching {
-    pub maximum_cache_checkpoints_per_request: Option<i64>,
-    pub minimum_tokens_per_cache_checkpoint: Option<i64>,
-    pub supports_prompt_caching: Option<bool>,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase")]
-pub struct AvailableModel {
-    pub model_id: String,
-    #[serde(default)]
-    pub model_name: String,
-    #[serde(default)]
-    pub description: String,
-    pub provider: Option<String>,
-    #[serde(default)]
-    pub capabilities: Vec<String>,
-    pub context_window: Option<i64>,
-    pub is_default: Option<bool>,
-    pub rate_multiplier: Option<f64>,
-    pub rate_unit: Option<String>,
-    pub prompt_caching: Option<AvailableModelPromptCaching>,
-    #[serde(default)]
-    pub supported_input_types: Vec<String>,
-    pub token_limits: Option<AvailableModelTokenLimits>,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase")]
-pub struct ListAvailableModelsResponse {
-    #[serde(default)]
-    pub models: Vec<AvailableModel>,
-    pub next_token: Option<String>,
-    pub default_model: Option<AvailableModel>,
-}
-
-fn build_list_available_models_url(
-    base_url: &str,
-    profile_arn: Option<&str>,
-    model_provider: Option<&str>,
-    next_token: Option<&str>,
-) -> Result<String, String> {
-    let mut url = reqwest::Url::parse(base_url)
-        .map_err(|error| format!("ListAvailableModels base URL 无效: {error}"))?;
-    url.set_path("ListAvailableModels");
-
-    {
-        let mut pairs = url.query_pairs_mut();
-        pairs.append_pair("origin", "AI_EDITOR");
-        pairs.append_pair("maxResults", "50");
-        if let Some(profile_arn) = profile_arn.filter(|value| !value.trim().is_empty()) {
-            pairs.append_pair("profileArn", profile_arn);
-        }
-        if let Some(model_provider) = model_provider.filter(|value| !value.trim().is_empty()) {
-            pairs.append_pair("modelProvider", model_provider);
-        }
-        if let Some(next_token) = next_token.filter(|value| !value.trim().is_empty()) {
-            pairs.append_pair("nextToken", next_token);
-        }
-    }
-
-    Ok(url.into())
-}
-
-fn build_kiro_models_user_agent(machine_id: &str) -> String {
-    build_kiro_custom_user_agent(machine_id)
-}
-
-fn is_external_idp_auth_method(auth_method: Option<&str>) -> bool {
-    auth_method.is_some_and(|value| value.trim().eq_ignore_ascii_case("external_idp"))
-}
-
-fn now_unix_timestamp() -> i64 {
-    chrono::Utc::now().timestamp()
-}
-
-fn is_available_models_cache_fresh(cached_at: i64, now: i64) -> bool {
-    now.saturating_sub(cached_at) <= AVAILABLE_MODELS_CACHE_TTL_SECONDS
-}
-
-fn read_available_models_cache(
-    account: &Account,
-    model_provider: Option<&str>,
-    force_refresh: bool,
-) -> Option<ListAvailableModelsResponse> {
-    if force_refresh {
-        return None;
-    }
-    let cache = account.available_models_cache.as_ref()?;
-    if !is_available_models_cache_fresh(cache.cached_at, now_unix_timestamp()) {
-        return None;
-    }
-    if cache.model_provider.as_deref() != model_provider {
-        return None;
-    }
-    serde_json::from_value(cache.response.clone()).ok()
-}
-
-fn write_available_models_cache(
-    account: &mut Account,
-    model_provider: Option<&str>,
-    response: &ListAvailableModelsResponse,
-) -> Result<(), String> {
-    let response_value =
-        serde_json::to_value(response).map_err(|error| format!("序列化模型缓存失败: {error}"))?;
-    account.available_models_cache = Some(AvailableModelsCacheEntry {
-        response: response_value,
-        cached_at: now_unix_timestamp(),
-        model_provider: model_provider.map(str::to_string),
-    });
-    Ok(())
-}
-
-fn clear_available_models_cache(account: &mut Account) {
-    account.available_models_cache = None;
-}
-
-async fn fetch_available_models_page(
-    account: &Account,
-    access_token: &str,
-    model_provider: Option<&str>,
-    next_token: Option<&str>,
-) -> Result<ListAvailableModelsResponse, String> {
-    let machine_id = account
-        .machine_id
-        .clone()
-        .filter(|value| !value.trim().is_empty())
-        .unwrap_or_else(get_machine_id);
-    let user_agent = build_kiro_models_user_agent(&machine_id);
-    let region = resolve_kiro_upstream_region(
-        account.profile_arn.as_deref(),
-        account.region.as_deref(),
-        "us-east-1",
-    );
-    let base_url = resolve_q_service_endpoint(Some(&region));
-    let url = build_list_available_models_url(
-        base_url,
-        account.profile_arn.as_deref(),
-        model_provider,
-        next_token,
-    )?;
-    let client = build_http_client_with_user_agent(&user_agent)?;
-    let mut request = client
-        .get(url)
-        .header("Authorization", format!("Bearer {access_token}"))
-        .header("Accept", "application/json")
-        .header("x-amz-user-agent", &user_agent);
-    if is_external_idp_auth_method(account.auth_method.as_deref()) {
-        request = request.header("TokenType", "EXTERNAL_IDP");
-    }
-    let response = request
-        .send()
-        .await
-        .map_err(|error| format!("ListAvailableModels 请求失败: {error}"))?;
-
-    let status = response.status();
-    if !status.is_success() {
-        let body = response.text().await.unwrap_or_default();
-        if status.as_u16() == 401 || status.as_u16() == 403 {
-            return Err(format!(
-                "AUTH_ERROR: ListAvailableModels failed ({status}): {body}"
-            ));
-        }
-        return Err(format!("ListAvailableModels failed ({status}): {body}"));
-    }
-
-    response
-        .json::<ListAvailableModelsResponse>()
-        .await
-        .map_err(|error| format!("解析 ListAvailableModels 响应失败: {error}"))
-}
-
-fn mark_default_model(models: &mut [AvailableModel], default_model_id: Option<&str>) {
-    if let Some(default_id) = default_model_id {
-        for model in models {
-            if model.model_id == default_id && model.is_default.is_none() {
-                model.is_default = Some(true);
-            }
-        }
-    }
-}
-
-fn ensure_default_model_present(response: &mut ListAvailableModelsResponse) {
-    if let Some(default_model) = response.default_model.clone() {
-        if response
-            .models
-            .iter()
-            .all(|model| model.model_id != default_model.model_id)
-        {
-            response.models.insert(0, default_model);
-        }
-    }
-}
-
-async fn fetch_all_available_models(
-    account: &Account,
-    access_token: &str,
-    model_provider: Option<&str>,
-) -> Result<ListAvailableModelsResponse, String> {
-    let mut aggregated = ListAvailableModelsResponse {
-        models: Vec::new(),
-        next_token: None,
-        default_model: None,
-    };
-    let mut next_token: Option<String> = None;
-
-    loop {
-        let mut response = fetch_available_models_page(
-            account,
-            access_token,
-            model_provider,
-            next_token.as_deref(),
-        )
-        .await?;
-
-        if aggregated.default_model.is_none() {
-            aggregated.default_model = response.default_model.clone();
-        }
-
-        let default_model_id = aggregated
-            .default_model
-            .as_ref()
-            .map(|model| model.model_id.as_str());
-        mark_default_model(&mut response.models, default_model_id);
-
-        if let Some(default_model) = aggregated.default_model.as_mut() {
-            default_model.is_default = Some(true);
-        }
-
-        aggregated.models.extend(response.models);
-        next_token = response.next_token;
-        if next_token.is_none() {
-            break;
-        }
-    }
-
-    ensure_default_model_present(&mut aggregated);
-    sort_available_models_for_display(&mut aggregated.models);
-    aggregated.next_token = None;
-
-    Ok(aggregated)
-}
-
-fn sort_available_models_for_display(models: &mut [AvailableModel]) {
-    models.sort_by_key(|model| !model.is_default.unwrap_or(false));
-}
-
 fn apply_refreshed_account_tokens(account: &mut Account, refresh: &RefreshResult) {
     clear_available_models_cache(account);
     account.access_token = Some(refresh.access_token.clone());
@@ -388,28 +143,45 @@ fn apply_refreshed_account_tokens(account: &mut Account, refresh: &RefreshResult
 
 #[tauri::command]
 pub fn get_accounts(state: State<AppState>) -> Vec<Account> {
-    let mut store = state.store.lock().expect("Failed to acquire store lock");
-    // 每次获取前重新从文件加载，确保数据最新
-    store.reload();
-    store.get_all()
+    match lock_store(&state.store, "store") {
+        Ok(mut store) => {
+            // 每次获取前重新从文件加载，确保数据最新
+            store.reload();
+            store.get_all()
+        }
+        Err(err) => {
+            eprintln!("[account_cmd] {err}");
+            Vec::new()
+        }
+    }
 }
 
 #[tauri::command]
 pub fn delete_account(state: State<AppState>, id: &str) -> bool {
-    state
-        .store
-        .lock()
-        .expect("Failed to acquire store lock")
-        .delete(id)
+    match lock_store(&state.store, "store") {
+        Ok(mut store) => store.delete(id).unwrap_or_else(|err| {
+            eprintln!("[account_cmd] {err}");
+            false
+        }),
+        Err(err) => {
+            eprintln!("[account_cmd] {err}");
+            false
+        }
+    }
 }
 
 #[tauri::command]
 pub fn delete_accounts(state: State<AppState>, ids: Vec<String>) -> usize {
-    state
-        .store
-        .lock()
-        .expect("Failed to acquire store lock")
-        .delete_many(&ids)
+    match lock_store(&state.store, "store") {
+        Ok(mut store) => store.delete_many(&ids).unwrap_or_else(|err| {
+            eprintln!("[account_cmd] {err}");
+            0
+        }),
+        Err(err) => {
+            eprintln!("[account_cmd] {err}");
+            0
+        }
+    }
 }
 
 #[tauri::command]
@@ -418,7 +190,7 @@ pub async fn sync_account(
     id: String,
 ) -> Result<SyncAccountResult, String> {
     let account = {
-        let store = state.store.lock().expect("Failed to acquire store lock");
+        let store = lock_store(&state.store, "store")?;
         store.accounts.iter().find(|a| a.id == id).cloned()
     }
     .ok_or("Account not found")?;
@@ -444,14 +216,14 @@ pub async fn sync_account(
             }
             Err(e) => {
                 if e.starts_with("BANNED:") || is_auth_error_message(&e) {
-                    let mut store = state.store.lock().expect("Failed to acquire store lock");
+                    let mut store = lock_store(&state.store, "store")?;
                     if let Some(a) = store.accounts.iter_mut().find(|a| a.id == id) {
                         a.status = if e.starts_with("BANNED:") {
                             "banned".to_string()
                         } else {
                             "invalid".to_string()
                         };
-                        store.save_to_file();
+                        save_store(&store)?;
                     }
                 }
                 return Err(e);
@@ -468,7 +240,7 @@ pub async fn sync_account(
         }
     };
 
-    let mut store = state.store.lock().expect("Failed to acquire store lock");
+    let mut store = lock_store(&state.store, "store")?;
     let result = if let Some(a) = store.accounts.iter_mut().find(|a| a.id == id) {
         // 如果刷新了 token，更新 token 相关字段
         if let Some(result) = refresh_result {
@@ -508,7 +280,7 @@ pub async fn sync_account(
     };
 
     // 保存文件
-    store.save_to_file();
+    save_store(&store)?;
 
     match result {
         Some(account) => Ok(SyncAccountResult { account, warning }),
@@ -524,7 +296,7 @@ pub async fn refresh_account_token(
     id: String,
 ) -> Result<Account, String> {
     let account = {
-        let store = state.store.lock().expect("Failed to acquire store lock");
+        let store = lock_store(&state.store, "store")?;
         store.accounts.iter().find(|a| a.id == id).cloned()
     }
     .ok_or("Account not found")?;
@@ -544,21 +316,21 @@ pub async fn refresh_account_token(
         Ok(result) => result,
         Err(e) => {
             if e.starts_with("BANNED:") || is_auth_error_message(&e) {
-                let mut store = state.store.lock().expect("Failed to acquire store lock");
+                let mut store = lock_store(&state.store, "store")?;
                 if let Some(a) = store.accounts.iter_mut().find(|a| a.id == id) {
                     a.status = if e.starts_with("BANNED:") {
                         "banned".to_string()
                     } else {
                         "invalid".to_string()
                     };
-                    store.save_to_file();
+                    save_store(&store)?;
                 }
             }
             return Err(e);
         }
     };
 
-    let mut store = state.store.lock().expect("Failed to acquire store lock");
+    let mut store = lock_store(&state.store, "store")?;
     if let Some(a) = store.accounts.iter_mut().find(|a| a.id == id) {
         clear_available_models_cache(a);
         // 直接移动所有权，避免 clone
@@ -572,7 +344,7 @@ pub async fn refresh_account_token(
             a.status = "active".to_string();
         }
         let result = a.clone();
-        store.save_to_file();
+        save_store(&store)?;
         return Ok(result);
     }
     Err("Account not found after update".to_string())
@@ -599,7 +371,7 @@ pub async fn verify_account(
         let (cid, csec, reg) = if client_id.is_some() && client_secret.is_some() {
             (client_id, client_secret, region)
         } else {
-            let store = state.store.lock().expect("Failed to acquire store lock");
+            let store = lock_store(&state.store, "store")?;
             store
                 .accounts
                 .iter()
@@ -638,7 +410,7 @@ pub async fn verify_account(
 
     // 更新数据库
     {
-        let mut store = state.store.lock().expect("Failed to acquire store lock");
+        let mut store = lock_store(&state.store, "store")?;
         if let Some(account) = store
             .accounts
             .iter_mut()
@@ -647,7 +419,7 @@ pub async fn verify_account(
             // 直接移动所有权，避免 clone
             account.access_token = Some(new_access_token.clone()); // ✅ 这里必须 clone，因为后面还要用
             account.refresh_token = Some(new_refresh_token.clone()); // ✅ 这里必须 clone，因为后面还要用
-            store.save_to_file();
+            save_store(&store)?;
         }
     }
 
@@ -729,7 +501,7 @@ pub async fn add_account_by_social(
         }
     });
 
-    let mut store = state.store.lock().expect("Failed to acquire store lock");
+    let mut store = lock_store(&state.store, "store")?;
     let existing_idx = find_existing_account_idx(
         &store.accounts,
         Some(&final_email),
@@ -767,7 +539,7 @@ pub async fn add_account_by_social(
         account
     };
 
-    store.save_to_file();
+    save_store(&store)?;
     drop(store);
 
     let user = User {
@@ -782,32 +554,27 @@ pub async fn add_account_by_social(
         avatar: None,
         provider: idp,
     };
-    *state
-        .auth
-        .user
-        .lock()
-        .expect("Failed to acquire auth user lock") = Some(user);
-    *state
-        .auth
-        .access_token
-        .lock()
-        .expect("Failed to acquire auth access_token lock") = Some(final_access_token);
+    *lock_store(&state.auth.user, "auth user")? = Some(user);
+    *lock_store(&state.auth.access_token, "auth access_token")? = Some(final_access_token);
 
     Ok(AddAccountResult { account, is_new })
 }
 
 #[tauri::command]
 pub fn import_accounts(state: State<AppState>, json: &str) -> Result<usize, String> {
-    state
-        .store
-        .lock()
-        .expect("Failed to acquire store lock")
-        .import_from_json(json)
+    let mut store = lock_store(&state.store, "store")?;
+    store.import_from_json(json)
 }
 
 #[tauri::command]
 pub fn export_accounts(state: State<AppState>, ids: Option<Vec<String>>) -> String {
-    let store = state.store.lock().expect("Failed to acquire store lock");
+    let store = match lock_store(&state.store, "store") {
+        Ok(store) => store,
+        Err(err) => {
+            eprintln!("[account_cmd] {err}");
+            return "[]".to_string();
+        }
+    };
 
     // 修复账号数据
     let fix_account = |mut account: Account| -> Account {
@@ -1107,7 +874,7 @@ async fn add_account_by_idc_internal(
             start_url.as_ref().map(|url| calculate_client_id_hash(url)) // 如果提取到了 startUrl，计算
         };
 
-        let mut store = state.store.lock().expect("Failed to acquire store lock");
+        let mut store = lock_store(&state.store, "store")?;
         let existing_idx = find_existing_account_idx(
             &store.accounts,
             new_email.as_ref(),
@@ -1174,7 +941,7 @@ async fn add_account_by_idc_internal(
             account
         };
 
-        store.save_to_file();
+        save_store(&store)?;
         Ok(AddAccountResult { account, is_new })
     } else {
         // BuilderId 账号：必须有 email
@@ -1186,7 +953,7 @@ async fn add_account_by_idc_internal(
             params.start_url.as_deref(),
         ));
 
-        let mut store = state.store.lock().expect("Failed to acquire store lock");
+        let mut store = lock_store(&state.store, "store")?;
         let existing_idx = find_existing_account_idx(
             &store.accounts,
             Some(&email),
@@ -1250,7 +1017,7 @@ async fn add_account_by_idc_internal(
             account
         };
 
-        store.save_to_file();
+        save_store(&store)?;
         Ok(AddAccountResult { account, is_new })
     }
 }
@@ -1261,7 +1028,7 @@ pub fn update_account(
     state: State<AppState>,
     params: UpdateAccountParams,
 ) -> Result<Account, String> {
-    let mut store = state.store.lock().expect("Failed to acquire store lock");
+    let mut store = lock_store(&state.store, "store")?;
 
     // 先找到索引，避免借用冲突
     let idx = store.accounts.iter().position(|a| a.id == params.id);
@@ -1291,7 +1058,7 @@ pub fn update_account(
             store.accounts[idx].machine_id = Some(mid);
         }
         let result = store.accounts[idx].clone();
-        store.save_to_file();
+        save_store(&store)?;
         Ok(result)
     } else {
         Err("账号不存在".to_string())
@@ -1311,7 +1078,7 @@ pub async fn delete_account_remote(
 
     // 获取账号信息
     let account = {
-        let store = state.store.lock().expect("Failed to acquire store lock");
+        let store = lock_store(&state.store, "store")?;
         store.accounts.iter().find(|a| a.id == id).cloned()
     }
     .ok_or("账号不存在")?;
@@ -1336,8 +1103,8 @@ pub async fn delete_account_remote(
 
     // 如果需要同时删除本地记录
     if delete_local {
-        let mut store = state.store.lock().expect("Failed to acquire store lock");
-        store.delete(&id);
+        let mut store = lock_store(&state.store, "store")?;
+        store.delete(&id)?;
     }
 
     Ok(format!("账号 {} 已从服务端删除", account.get_display_id()))
@@ -1350,34 +1117,49 @@ pub async fn delete_account_remote(
 /// 获取可用账号列表（用于自动换号）
 #[tauri::command]
 pub fn get_available_accounts(state: State<AppState>) -> Vec<Account> {
-    let store = state.store.lock().expect("Failed to acquire store lock");
-    store
-        .get_available_accounts()
-        .into_iter()
-        .cloned()
-        .collect()
+    match lock_store(&state.store, "store") {
+        Ok(store) => store
+            .get_available_accounts()
+            .into_iter()
+            .cloned()
+            .collect(),
+        Err(err) => {
+            eprintln!("[account_cmd] {err}");
+            Vec::new()
+        }
+    }
 }
 
 /// 按分组筛选账号
 #[tauri::command]
 pub fn get_accounts_by_group(state: State<AppState>, group_id: String) -> Vec<Account> {
-    let store = state.store.lock().expect("Failed to acquire store lock");
-    store
-        .get_accounts_by_group(&group_id)
-        .into_iter()
-        .cloned()
-        .collect()
+    match lock_store(&state.store, "store") {
+        Ok(store) => store
+            .get_accounts_by_group(&group_id)
+            .into_iter()
+            .cloned()
+            .collect(),
+        Err(err) => {
+            eprintln!("[account_cmd] {err}");
+            Vec::new()
+        }
+    }
 }
 
 /// 按标签筛选账号
 #[tauri::command]
 pub fn get_accounts_by_tag(state: State<AppState>, tag_id: String) -> Vec<Account> {
-    let store = state.store.lock().expect("Failed to acquire store lock");
-    store
-        .get_accounts_by_tag(&tag_id)
-        .into_iter()
-        .cloned()
-        .collect()
+    match lock_store(&state.store, "store") {
+        Ok(store) => store
+            .get_accounts_by_tag(&tag_id)
+            .into_iter()
+            .cloned()
+            .collect(),
+        Err(err) => {
+            eprintln!("[account_cmd] {err}");
+            Vec::new()
+        }
+    }
 }
 
 // ============================================================
@@ -1405,7 +1187,7 @@ pub async fn list_available_models(
     force_refresh: Option<bool>,
 ) -> Result<ListAvailableModelsResponse, String> {
     let mut account = {
-        let store = state.store.lock().expect("Failed to acquire store lock");
+        let store = lock_store(&state.store, "store")?;
         store.accounts.iter().find(|item| item.id == id).cloned()
     }
     .ok_or("账号不存在")?;
@@ -1427,10 +1209,10 @@ pub async fn list_available_models(
         .await
     {
         Ok(response) => {
-            let mut store = state.store.lock().expect("Failed to acquire store lock");
+            let mut store = lock_store(&state.store, "store")?;
             if let Some(stored_account) = store.accounts.iter_mut().find(|item| item.id == id) {
                 write_available_models_cache(stored_account, model_provider.as_deref(), &response)?;
-                store.save_to_file();
+                save_store(&store)?;
             }
             Ok(response)
         }
@@ -1439,14 +1221,14 @@ pub async fn list_available_models(
             apply_refreshed_account_tokens(&mut account, &refresh);
 
             {
-                let mut store = state.store.lock().expect("Failed to acquire store lock");
+                let mut store = lock_store(&state.store, "store")?;
                 let stored_account = store
                     .accounts
                     .iter_mut()
                     .find(|item| item.id == id)
                     .ok_or("账号不存在")?;
                 apply_refreshed_account_tokens(stored_account, &refresh);
-                store.save_to_file();
+                save_store(&store)?;
             }
             let response = fetch_all_available_models(
                 &account,
@@ -1455,14 +1237,14 @@ pub async fn list_available_models(
             )
             .await?;
             {
-                let mut store = state.store.lock().expect("Failed to acquire store lock");
+                let mut store = lock_store(&state.store, "store")?;
                 if let Some(stored_account) = store.accounts.iter_mut().find(|item| item.id == id) {
                     write_available_models_cache(
                         stored_account,
                         model_provider.as_deref(),
                         &response,
                     )?;
-                    store.save_to_file();
+                    save_store(&store)?;
                 }
             }
             Ok(response)
@@ -1473,414 +1255,7 @@ pub async fn list_available_models(
 
 #[cfg(test)]
 mod tests {
-    use super::{
-        build_list_available_models_url, clear_available_models_cache,
-        ensure_default_model_present, is_available_models_cache_fresh, mark_default_model,
-        read_available_models_cache, resolve_builder_client_id_hash,
-        sort_available_models_for_display,
-        write_available_models_cache, AvailableModel, ListAvailableModelsResponse,
-        AVAILABLE_MODELS_CACHE_TTL_SECONDS,
-    };
-    use crate::account::Account;
-
-    #[test]
-    fn build_list_available_models_url_keeps_expected_query_shape() {
-        let url = build_list_available_models_url(
-            "https://q.us-east-1.amazonaws.com",
-            Some("arn:aws:codewhisperer:::profile/test"),
-            Some("anthropic"),
-            Some("next-token"),
-        )
-        .expect("url should build");
-        let parsed = reqwest::Url::parse(&url).expect("url should parse");
-        let params: std::collections::HashMap<_, _> = parsed.query_pairs().into_owned().collect();
-
-        assert_eq!(parsed.path(), "/ListAvailableModels");
-        assert_eq!(params.get("origin").map(String::as_str), Some("AI_EDITOR"));
-        assert_eq!(params.get("maxResults").map(String::as_str), Some("50"));
-        assert_eq!(
-            params.get("profileArn").map(String::as_str),
-            Some("arn:aws:codewhisperer:::profile/test")
-        );
-        assert_eq!(
-            params.get("modelProvider").map(String::as_str),
-            Some("anthropic")
-        );
-        assert_eq!(
-            params.get("nextToken").map(String::as_str),
-            Some("next-token")
-        );
-    }
-
-    #[test]
-    fn deserialize_list_available_models_response_supports_known_fields() {
-        let response: ListAvailableModelsResponse = serde_json::from_value(serde_json::json!({
-            "models": [
-                {
-                    "modelId": "claude-sonnet-4.5",
-                    "modelName": "Claude Sonnet 4.5",
-                    "description": "The Claude Sonnet 4.5 model",
-                    "rateMultiplier": 1.3,
-                    "rateUnit": "Credit",
-                    "supportedInputTypes": ["TEXT", "IMAGE"],
-                    "tokenLimits": {
-                        "maxInputTokens": 200000,
-                        "maxOutputTokens": 64000
-                    }
-                }
-            ],
-            "nextToken": "page-2"
-        }))
-        .expect("response should deserialize");
-
-        assert_eq!(response.models.len(), 1);
-        assert_eq!(response.models[0].model_id, "claude-sonnet-4.5");
-        assert_eq!(response.models[0].model_name, "Claude Sonnet 4.5");
-        assert_eq!(
-            response.models[0].supported_input_types,
-            vec!["TEXT".to_string(), "IMAGE".to_string()]
-        );
-        assert_eq!(
-            response.models[0]
-                .token_limits
-                .as_ref()
-                .and_then(|limits| limits.max_input_tokens),
-            Some(200000)
-        );
-        assert_eq!(
-            response.models[0]
-                .token_limits
-                .as_ref()
-                .and_then(|limits| limits.max_output_tokens),
-            Some(64000)
-        );
-        assert_eq!(response.next_token.as_deref(), Some("page-2"));
-    }
-
-    #[test]
-    fn deserialize_list_available_models_response_supports_full_default_model_shape() {
-        let response: ListAvailableModelsResponse = serde_json::from_value(serde_json::json!({
-            "models": [
-                {
-                    "modelId": "claude-sonnet-4",
-                    "modelName": "Claude Sonnet 4",
-                    "description": "Hybrid reasoning and coding for regular use",
-                    "isDefault": true,
-                    "promptCaching": {
-                        "maximumCacheCheckpointsPerRequest": 4,
-                        "minimumTokensPerCacheCheckpoint": 1024,
-                        "supportsPromptCaching": true
-                    },
-                    "rateMultiplier": 1.3,
-                    "rateUnit": "Credit",
-                    "supportedInputTypes": ["TEXT", "IMAGE"],
-                    "tokenLimits": {
-                        "maxInputTokens": 200000,
-                        "maxOutputTokens": 64000
-                    }
-                }
-            ],
-            "defaultModel": {
-                "modelId": "claude-sonnet-4",
-                "modelName": "Claude Sonnet 4",
-                "description": "Hybrid reasoning and coding for regular use",
-                "promptCaching": {
-                    "maximumCacheCheckpointsPerRequest": 4,
-                    "minimumTokensPerCacheCheckpoint": 1024,
-                    "supportsPromptCaching": true
-                },
-                "rateMultiplier": 1.3,
-                "rateUnit": "Credit",
-                "supportedInputTypes": ["TEXT", "IMAGE"],
-                "tokenLimits": {
-                    "maxInputTokens": 200000,
-                    "maxOutputTokens": 64000
-                }
-            }
-        }))
-        .expect("full response should deserialize");
-
-        assert_eq!(response.models.len(), 1);
-        assert_eq!(response.models[0].model_id, "claude-sonnet-4");
-        assert_eq!(response.models[0].model_name, "Claude Sonnet 4");
-        assert_eq!(
-            response.models[0].description,
-            "Hybrid reasoning and coding for regular use"
-        );
-        assert_eq!(response.models[0].is_default, Some(true));
-        assert_eq!(
-            response.models[0]
-                .prompt_caching
-                .as_ref()
-                .and_then(|value| value.supports_prompt_caching),
-            Some(true)
-        );
-        assert_eq!(
-            response
-                .default_model
-                .as_ref()
-                .map(|model| model.model_id.as_str()),
-            Some("claude-sonnet-4")
-        );
-        assert_eq!(
-            response
-                .default_model
-                .as_ref()
-                .and_then(|model| model.prompt_caching.as_ref())
-                .and_then(|value| value.minimum_tokens_per_cache_checkpoint),
-            Some(1024)
-        );
-    }
-
-    #[test]
-    fn deserialize_list_available_models_response_supports_live_default_model_shape() {
-        let response: ListAvailableModelsResponse = serde_json::from_value(serde_json::json!({
-            "defaultModel": {
-                "description": "Models chosen by task for optimal usage and consistent quality",
-                "modelId": "auto",
-                "modelName": "Auto",
-                "promptCaching": {
-                    "maximumCacheCheckpointsPerRequest": 4,
-                    "minimumTokensPerCacheCheckpoint": 1024,
-                    "supportsPromptCaching": true
-                },
-                "rateMultiplier": 1.0,
-                "rateUnit": "Credit",
-                "supportedInputTypes": ["TEXT", "IMAGE"],
-                "tokenLimits": {
-                    "maxInputTokens": 200000,
-                    "maxOutputTokens": 64000
-                }
-            },
-            "models": [
-                {
-                    "description": "Models chosen by task for optimal usage and consistent quality",
-                    "modelId": "auto",
-                    "modelName": "Auto"
-                }
-            ],
-            "nextToken": null
-        }))
-        .expect("live response shape should deserialize");
-
-        let default_model = response
-            .default_model
-            .as_ref()
-            .expect("default model should exist");
-        assert_eq!(default_model.model_id, "auto");
-        assert_eq!(default_model.model_name, "Auto");
-        assert_eq!(
-            default_model
-                .prompt_caching
-                .as_ref()
-                .and_then(|value| value.supports_prompt_caching),
-            Some(true)
-        );
-        assert_eq!(
-            default_model
-                .prompt_caching
-                .as_ref()
-                .and_then(|value| value.maximum_cache_checkpoints_per_request),
-            Some(4)
-        );
-        assert_eq!(
-            default_model
-                .prompt_caching
-                .as_ref()
-                .and_then(|value| value.minimum_tokens_per_cache_checkpoint),
-            Some(1024)
-        );
-        assert_eq!(
-            default_model
-                .token_limits
-                .as_ref()
-                .and_then(|limits| limits.max_output_tokens),
-            Some(64000)
-        );
-    }
-
-    #[test]
-    fn sort_available_models_for_display_prioritizes_default_models() {
-        let mut models: Vec<AvailableModel> = serde_json::from_value(serde_json::json!([
-            {
-                "modelId": "claude-sonnet-4.5",
-                "modelName": "Claude Sonnet 4.5"
-            },
-            {
-                "modelId": "auto",
-                "modelName": "Auto",
-                "isDefault": true
-            },
-            {
-                "modelId": "claude-sonnet-4",
-                "modelName": "Claude Sonnet 4"
-            }
-        ]))
-        .expect("models should deserialize");
-
-        sort_available_models_for_display(&mut models);
-
-        let ordered_ids: Vec<_> = models.iter().map(|model| model.model_id.as_str()).collect();
-        assert_eq!(
-            ordered_ids,
-            vec!["auto", "claude-sonnet-4.5", "claude-sonnet-4"]
-        );
-    }
-
-    #[test]
-    fn mark_default_model_sets_matching_entry() {
-        let mut models: Vec<AvailableModel> = serde_json::from_value(serde_json::json!([
-            { "modelId": "claude-sonnet-4.5", "modelName": "Claude Sonnet 4.5" },
-            { "modelId": "auto", "modelName": "Auto" }
-        ]))
-        .expect("models should deserialize");
-
-        mark_default_model(&mut models, Some("auto"));
-
-        assert_eq!(models[0].is_default, None);
-        assert_eq!(models[1].is_default, Some(true));
-    }
-
-    #[test]
-    fn ensure_default_model_present_inserts_only_once() {
-        let mut response: ListAvailableModelsResponse = serde_json::from_value(serde_json::json!({
-            "defaultModel": {
-                "modelId": "auto",
-                "modelName": "Auto"
-            },
-            "models": [
-                {
-                    "modelId": "claude-sonnet-4.5",
-                    "modelName": "Claude Sonnet 4.5"
-                }
-            ],
-            "nextToken": null
-        }))
-        .expect("response should deserialize");
-
-        ensure_default_model_present(&mut response);
-        ensure_default_model_present(&mut response);
-
-        let auto_count = response
-            .models
-            .iter()
-            .filter(|model| model.model_id == "auto")
-            .count();
-        assert_eq!(auto_count, 1);
-        assert_eq!(
-            response.models.first().map(|model| model.model_id.as_str()),
-            Some("auto")
-        );
-    }
-
-    #[test]
-    fn available_models_cache_round_trips_response() {
-        let mut account = Account::new("cache@example.com".to_string(), "cache".to_string());
-        let response: ListAvailableModelsResponse = serde_json::from_value(serde_json::json!({
-            "defaultModel": {
-                "modelId": "auto",
-                "modelName": "Auto"
-            },
-            "models": [
-                {
-                    "modelId": "auto",
-                    "modelName": "Auto"
-                },
-                {
-                    "modelId": "claude-sonnet-4.5",
-                    "modelName": "Claude Sonnet 4.5"
-                }
-            ],
-            "nextToken": null
-        }))
-        .expect("response should deserialize");
-
-        write_available_models_cache(&mut account, Some("anthropic"), &response)
-            .expect("cache write should succeed");
-        let cached = read_available_models_cache(&account, Some("anthropic"), false)
-            .expect("cache should be readable");
-
-        assert_eq!(cached.models.len(), 2);
-        assert_eq!(
-            cached
-                .default_model
-                .as_ref()
-                .map(|model| model.model_id.as_str()),
-            Some("auto")
-        );
-    }
-
-    #[test]
-    fn available_models_cache_expires_after_ttl() {
-        assert!(is_available_models_cache_fresh(
-            100,
-            100 + AVAILABLE_MODELS_CACHE_TTL_SECONDS
-        ));
-        assert!(!is_available_models_cache_fresh(
-            100,
-            101 + AVAILABLE_MODELS_CACHE_TTL_SECONDS
-        ));
-    }
-
-    #[test]
-    fn clear_available_models_cache_removes_cached_response() {
-        let mut account = Account::new("cache@example.com".to_string(), "cache".to_string());
-        let response: ListAvailableModelsResponse = serde_json::from_value(serde_json::json!({
-            "defaultModel": {
-                "modelId": "auto",
-                "modelName": "Auto"
-            },
-            "models": [],
-            "nextToken": null
-        }))
-        .expect("response should deserialize");
-
-        write_available_models_cache(&mut account, None, &response)
-            .expect("cache write should succeed");
-        clear_available_models_cache(&mut account);
-
-        assert!(read_available_models_cache(&account, None, false).is_none());
-    }
-
-    #[test]
-    fn available_models_cache_misses_when_model_provider_differs() {
-        let mut account = Account::new("cache@example.com".to_string(), "cache".to_string());
-        let response: ListAvailableModelsResponse = serde_json::from_value(serde_json::json!({
-            "defaultModel": {
-                "modelId": "auto",
-                "modelName": "Auto"
-            },
-            "models": [],
-            "nextToken": null
-        }))
-        .expect("response should deserialize");
-
-        write_available_models_cache(&mut account, Some("anthropic"), &response)
-            .expect("cache write should succeed");
-
-        assert!(read_available_models_cache(&account, Some("openai"), false).is_none());
-        assert!(read_available_models_cache(&account, None, false).is_none());
-        assert!(read_available_models_cache(&account, Some("anthropic"), false).is_some());
-    }
-
-    #[test]
-    fn available_models_cache_skips_when_force_refresh_enabled() {
-        let mut account = Account::new("cache@example.com".to_string(), "cache".to_string());
-        let response: ListAvailableModelsResponse = serde_json::from_value(serde_json::json!({
-            "defaultModel": {
-                "modelId": "auto",
-                "modelName": "Auto"
-            },
-            "models": [],
-            "nextToken": null
-        }))
-        .expect("response should deserialize");
-
-        write_available_models_cache(&mut account, None, &response)
-            .expect("cache write should succeed");
-
-        assert!(read_available_models_cache(&account, None, true).is_none());
-    }
+    use super::resolve_builder_client_id_hash;
 
     #[test]
     fn resolve_builder_client_id_hash_prefers_explicit_hash() {

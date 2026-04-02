@@ -1,7 +1,7 @@
 // Provider Factory - 根据 provider 创建对应的认证提供者
 // 参考 kiro-batch-login/src/providers/provider-factory.js
 
-use super::{SocialProvider, IdcProvider};
+use super::IdcProvider;
 
 /// 认证方式
 #[derive(Debug, Clone, PartialEq)]
@@ -44,7 +44,7 @@ pub fn get_provider_config(provider: &str) -> Option<ProviderConfig> {
             provider_id: "Enterprise".to_string(),
             auth_method: AuthMethod::Idc,
             region: "us-east-1".to_string(),
-            start_url: Some("https://view.awsapps.com/start".to_string()),  // 默认使用 BuilderId URL，用户可以自定义
+            start_url: Some("https://view.awsapps.com/start".to_string()), // 默认使用 BuilderId URL，用户可以自定义
         }),
         _ => None,
     }
@@ -55,12 +55,11 @@ pub fn get_supported_providers() -> Vec<&'static str> {
     vec!["Google", "Github", "BuilderId", "Enterprise"]
 }
 
-/// 创建 Social Provider
-pub fn create_social_provider(config: &ProviderConfig) -> SocialProvider {
-    SocialProvider::new(&config.provider_id)
-}
-
 /// 创建 `IdC` Provider
 pub fn create_idc_provider(config: &ProviderConfig) -> IdcProvider {
-    IdcProvider::new(&config.provider_id, &config.region, config.start_url.clone())
+    IdcProvider::new(
+        &config.provider_id,
+        &config.region,
+        config.start_url.clone(),
+    )
 }

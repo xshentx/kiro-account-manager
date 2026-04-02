@@ -50,10 +50,10 @@ const AccountCard = memo(function AccountCard({
     const subType = getSubType(account)
     const subPlan = getSubPlan(account)
     const percent = getUsagePercent(used, quota)
-    const statusMeta = getAccountStatusMeta(account.status, t)
-    const isBanned = isBannedStatus(account.status)
+    const statusMeta = getAccountStatusMeta(account, t)
+    const isBanned = isBannedStatus(account)
     const isNormal = statusMeta.key === 'active'
-    const isUnavailable = isUnavailableStatus(account.status)
+    const isUnavailable = isUnavailableStatus(account)
     const isExpired = account.expiresAt && new Date(account.expiresAt.replace(/\//g, '-')) < new Date()
     const breakdown = account.usageData?.usageBreakdownList?.[0]
     const nextDateReset = account.usageData?.nextDateReset

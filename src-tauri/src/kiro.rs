@@ -52,10 +52,13 @@ pub async fn get_kiro_local_token() -> Option<KiroLocalToken> {
             .join("sso")
             .join("cache")
             .join("kiro-auth-token.json");
-        
+
         let content = std::fs::read_to_string(&path).ok()?;
         serde_json::from_str(&content).ok()
-    }).await.ok().flatten()
+    })
+    .await
+    .ok()
+    .flatten()
 }
 
 /// 读取 `IdC` 客户端注册信息
@@ -70,10 +73,13 @@ pub async fn get_client_registration(client_id_hash: &str) -> Option<ClientRegis
             .join("sso")
             .join("cache")
             .join(format!("{hash}.json"));
-        
+
         let content = std::fs::read_to_string(&path).ok()?;
         serde_json::from_str(&content).ok()
-    }).await.ok().flatten()
+    })
+    .await
+    .ok()
+    .flatten()
 }
 
 // ===== 从 Kiro IDE 导入账号 =====
@@ -106,26 +112,29 @@ pub async fn read_kiro_accounts() -> Result<Vec<KiroAccountInfo>, String> {
         let home = std::env::var("USERPROFILE")
             .or_else(|_| std::env::var("HOME"))
             .map_err(|_| "无法获取用户目录")?;
-        
+
         let cache_dir = std::path::Path::new(&home)
             .join(".aws")
             .join("sso")
             .join("cache");
-        
+
         if !cache_dir.exists() {
             return Err("未找到 Kiro IDE 缓存目录".to_string());
         }
-        
+
         let mut accounts = Vec::new();
-        
+
         // 读取主 token 文件
         let token_path = cache_dir.join("kiro-auth-token.json");
         if token_path.exists() {
             if let Ok(content) = std::fs::read_to_string(&token_path) {
                 if let Ok(token) = serde_json::from_str::<KiroLocalToken>(&content) {
                     let auth_method = token.auth_method.as_deref().unwrap_or("social");
-                    let provider = token.provider.clone().unwrap_or_else(|| "Google".to_string());
-                    
+                    let provider = token
+                        .provider
+                        .clone()
+                        .unwrap_or_else(|| "Google".to_string());
+
                     let mut account = KiroAccountInfo {
                         email: String::new(), // 需要通过 API 获取
                         provider: provider.clone(),
@@ -139,34 +148,36 @@ pub async fn read_kiro_accounts() -> Result<Vec<KiroAccountInfo>, String> {
                         client_id_hash: token.client_id_hash.clone(),
                         region: token.region.clone(),
                     };
-                    
+
                     // 如果是 IdC 账号，读取 client registration
                     if auth_method == "IdC" {
                         if let Some(ref hash) = token.client_id_hash {
                             let client_path = cache_dir.join(format!("{hash}.json"));
                             if let Ok(client_content) = std::fs::read_to_string(&client_path) {
-                                if let Ok(client_reg) = serde_json::from_str::<ClientRegistration>(&client_content) {
+                                if let Ok(client_reg) =
+                                    serde_json::from_str::<ClientRegistration>(&client_content)
+                                {
                                     account.client_id = Some(client_reg.client_id);
                                     account.client_secret = Some(client_reg.client_secret);
                                 }
                             }
                         }
                     }
-                    
+
                     accounts.push(account);
                 }
             }
         }
-        
+
         if accounts.is_empty() {
             return Err("未找到 Kiro IDE 账号，请先在 Kiro IDE 中登录".to_string());
         }
-        
+
         Ok(accounts)
-    }).await.map_err(|e| format!("读取失败: {e}"))?
+    })
+    .await
+    .map_err(|e| format!("读取失败: {e}"))?
 }
-
-
 
 // ===== 切换账号 =====
 
@@ -202,7 +213,9 @@ pub struct SwitchAccountParams {
 
 /// 切换 Kiro 账号（原子写入 Token 文件，无需重启 IDE）
 #[tauri::command]
-pub async fn switch_kiro_account(params: SwitchAccountParams) -> Result<SwitchAccountResult, String> {
+pub async fn switch_kiro_account(
+    params: SwitchAccountParams,
+) -> Result<SwitchAccountResult, String> {
     tokio::task::spawn_blocking(move || {
         let auth_method = params.auth_method.unwrap_or_else(|| "social".to_string());
         let access_token = params.access_token;
@@ -213,37 +226,39 @@ pub async fn switch_kiro_account(params: SwitchAccountParams) -> Result<SwitchAc
         let client_id = params.client_id;
         let client_secret = params.client_secret;
         let region = params.region;
-        
+
         // 获取 token 目录
         let home = std::env::var("USERPROFILE")
             .or_else(|_| std::env::var("HOME"))
             .map_err(|_| "Cannot find home directory")?;
-        
+
         let dir_path = std::path::Path::new(&home)
             .join(".aws")
             .join("sso")
             .join("cache");
-        
+
         std::fs::create_dir_all(&dir_path)
             .map_err(|e| format!("Failed to create directory: {e}"))?;
-        
+
         let file_path = dir_path.join("kiro-auth-token.json");
         let expires_at = chrono::Utc::now() + chrono::Duration::hours(1);
-        
+
         // 根据 auth_method 构建 token 数据
         let token_data = if auth_method == "IdC" {
             // 确定 startUrl
             let actual_start_url = if provider == "BuilderId" {
                 "https://view.awsapps.com/start".to_string()
             } else if provider == "Enterprise" {
-                start_url.clone().ok_or("Enterprise 账号必须提供 start_url")?
+                start_url
+                    .clone()
+                    .ok_or("Enterprise 账号必须提供 start_url")?
             } else {
                 return Err(format!("未知的 IdC Provider: {provider}"));
             };
-            
+
             // 计算 clientIdHash
             let hash = calculate_client_id_hash(&actual_start_url);
-            
+
             serde_json::json!({
                 "accessToken": access_token,
                 "refreshToken": refresh_token,
@@ -254,9 +269,9 @@ pub async fn switch_kiro_account(params: SwitchAccountParams) -> Result<SwitchAc
                 "region": region.ok_or("IdC 账号必须提供 region")?,
             })
         } else {
-            let arn = profile_arn.unwrap_or_else(|| 
+            let arn = profile_arn.unwrap_or_else(|| {
                 "arn:aws:codewhisperer:us-east-1:699475941385:profile/EHGA3GRVQMUK".to_string()
-            );
+            });
             serde_json::json!({
                 "accessToken": access_token,
                 "refreshToken": refresh_token,
@@ -266,17 +281,17 @@ pub async fn switch_kiro_account(params: SwitchAccountParams) -> Result<SwitchAc
                 "provider": provider
             })
         };
-        
+
         let content = serde_json::to_string_pretty(&token_data)
             .map_err(|e| format!("Failed to serialize: {e}"))?;
-        
+
         // 原子写入：先写临时文件，再 rename
         let temp_file_path = dir_path.join("kiro-auth-token.json.tmp");
         std::fs::write(&temp_file_path, &content)
             .map_err(|e| format!("Failed to write temp file: {e}"))?;
         std::fs::rename(&temp_file_path, &file_path)
             .map_err(|e| format!("Failed to rename file: {e}"))?;
-        
+
         // IdC 账号还需要写入 Client Registration 文件
         if auth_method == "IdC" {
             if let (Some(cid), Some(csec)) = (client_id, client_secret) {
@@ -288,10 +303,10 @@ pub async fn switch_kiro_account(params: SwitchAccountParams) -> Result<SwitchAc
                 } else {
                     return Err(format!("未知的 IdC Provider: {provider}"));
                 };
-                
+
                 // 计算 clientIdHash
                 let hash = calculate_client_id_hash(&actual_start_url);
-                
+
                 let client_reg_path = dir_path.join(format!("{hash}.json"));
                 let client_reg_temp_path = dir_path.join(format!("{hash}.json.tmp"));
                 let client_expires = chrono::Utc::now() + chrono::Duration::days(90);
@@ -310,16 +325,12 @@ pub async fn switch_kiro_account(params: SwitchAccountParams) -> Result<SwitchAc
                 return Err("IdC 账号必须提供 client_id 和 client_secret".to_string());
             }
         }
-        
+
         Ok(SwitchAccountResult {
             success: true,
             message: format!("Switched to {provider} ({auth_method}) account"),
         })
-    }).await.map_err(|e| format!("Task failed: {e}"))?
+    })
+    .await
+    .map_err(|e| format!("Task failed: {e}"))?
 }
-
-
-
-
-
-

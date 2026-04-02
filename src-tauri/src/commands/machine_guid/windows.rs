@@ -28,9 +28,11 @@ pub fn get_system_machine_guid_inner() -> Result<SystemMachineInfo, String> {
     let (backup_exists, backup_time) = read_backup_info();
     Ok(SystemMachineInfo {
         machine_guid: Some(read_registry()?),
-        backup_exists, backup_time,
+        backup_exists,
+        backup_time,
         os_type: "windows".to_string(),
-        can_modify: true, requires_admin: true,
+        can_modify: true,
+        requires_admin: true,
     })
 }
 
@@ -67,4 +69,6 @@ pub fn set_custom_machine_guid_inner(new_guid: String) -> Result<String, String>
 }
 
 #[allow(clippy::unnecessary_wraps)] // 保持与其他平台的接口一致性
-pub fn clear_override_inner() -> Result<(), String> { Ok(()) }
+pub fn clear_override_inner() -> Result<(), String> {
+    Ok(())
+}

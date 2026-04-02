@@ -77,24 +77,20 @@ impl McpConfig {
             return Ok(Self::default());
         }
 
-        let content = fs::read_to_string(path)
-            .map_err(|e| format!("读取配置文件失败: {e}"))?;
+        let content = fs::read_to_string(path).map_err(|e| format!("读取配置文件失败: {e}"))?;
 
-        serde_json::from_str(&content)
-            .map_err(|e| format!("解析配置文件失败: {e}"))
+        serde_json::from_str(&content).map_err(|e| format!("解析配置文件失败: {e}"))
     }
 
     pub fn save_to_path(&self, path: &Path) -> Result<(), String> {
         if let Some(parent) = path.parent() {
-            fs::create_dir_all(parent)
-                .map_err(|e| format!("创建目录失败: {e}"))?;
+            fs::create_dir_all(parent).map_err(|e| format!("创建目录失败: {e}"))?;
         }
 
-        let content = serde_json::to_string_pretty(self)
-            .map_err(|e| format!("序列化配置失败: {e}"))?;
+        let content =
+            serde_json::to_string_pretty(self).map_err(|e| format!("序列化配置失败: {e}"))?;
 
-        fs::write(path, content)
-            .map_err(|e| format!("写入配置文件失败: {e}"))
+        fs::write(path, content).map_err(|e| format!("写入配置文件失败: {e}"))
     }
 
     /// 读取用户级配置（写操作使用）

@@ -8,15 +8,9 @@ import { useDialog } from '../../contexts/DialogContext'
 import { useAppSettings } from '../../contexts/AppSettingsContext'
 import { usePrivacy } from '../../contexts/PrivacyContext'
 import { getThemeAccent, isLightTheme as checkIsLightTheme } from './KiroConfig/themeAccent'
-
-// AI 模型配置
-const AI_MODELS = [
-    { value: 'claude-sonnet-4.5', label: 'Claude Sonnet 4.5 - 1.3x', recommended: true },
-    { value: 'claude-sonnet-4', label: 'Claude Sonnet 4 - 1.3x', recommended: false },
-    { value: 'claude-haiku-4.5', label: 'Claude Haiku 4.5 - 0.4x', recommended: false },
-    { value: 'claude-opus-4.5', label: 'Claude Opus 4.5 - 2.2x', recommended: false },
-    { value: 'claude-opus-4.6', label: 'Claude Opus 4.6 - 2.2x', recommended: false }
-]
+import { buildSettingsErrorMessage, persistAppSettings, runKiroCommandWithAppSettings } from './settingsActions'
+import { AI_MODELS, buildThemeOptions, NOTIFICATION_SETTINGS_FIELD_MAP } from './settingsConstants'
+import { isValidBrowserPath, isValidProxy, resolveOsLabel } from './settingsValidators'
 
 function Settings() {
     const { t, theme, colors, setTheme } = useApp()
@@ -87,17 +81,6 @@ function Settings() {
     const themeAccentTextClass = accent.text
     const themeAccentButtonClass = `${accent.solidBg} text-white ${accent.solidHoverBg} ${accent.border}`
 
-    const resolveOsLabel = (osType) => {
-        if (osType === 'windows') return 'Windows'
-        if (osType === 'macos') return 'macOS'
-        if (osType === 'linux') return 'Linux'
-        return osType || t('common.unknown')
-    }
-
-
-
-
-
     // 加载设置（指纹延迟加载，不阻塞页面）
     const loadSettings = async () => {
         setLoading(true)
@@ -167,34 +150,25 @@ function Settings() {
         loadSettings()
     }, [])
 
-    // 保存应用设置（后端已实现增量更新，直接传入要更新的字段）
-    const saveAppSettings = async (updates, notifyChange = false) => {
-        try {
-            const nextSettings = await updateAppSettings(updates)
-            if (!nextSettings) {
-                await showError(t('settings.saveFailed'), t('settings.saveFailed'))
-                return
-            }
-            if (notifyChange) {
-                await emit('settings-changed')
-            }
-            await emit('app-settings-changed', nextSettings)
-        } catch (err) {
-            console.error('Failed to save app settings:', err)
-            await showError(t('settings.saveFailed'), t('settings.saveFailed') + ': ' + err)
-        }
-    }
+    const saveAppSettings = (updates, notifyChange = false) => persistAppSettings({
+        updates,
+        notifyChange,
+        updateAppSettings,
+        emitFn: emit,
+        showError,
+        t,
+    })
 
-    // 验证代理URL格式
-    const isValidProxy = (url) => {
-        if (!url) return true // 允许空值（清除代理）
-        try {
-            const urlObj = new URL(url)
-            return ['http:', 'https:', 'socks5:', 'socks5h:', 'socks4:'].includes(urlObj.protocol)
-        } catch {
-            return false
-        }
-    }
+    const runKiroCommand = (command, commandArgs, appSettingsUpdates = null, notifyChange = false) => runKiroCommandWithAppSettings({
+        command,
+        commandArgs,
+        appSettingsUpdates,
+        notifyChange,
+        invokeFn: invoke,
+        persistSettings: ({ updates, notifyChange: shouldNotify }) => saveAppSettings(updates, shouldNotify),
+        showError,
+        t,
+    })
 
     const handleApplyProxy = async () => {
         // 验证代理格式
@@ -281,13 +255,7 @@ function Settings() {
 
     const handleCodebaseIndexingChange = async (checked) => {
         setEnableCodebaseIndexing(checked)
-        try {
-            // 同时写入 Kiro IDE 和 app-settings.json
-            await invoke('set_kiro_codebase_indexing', { enabled: checked })
-            await saveAppSettings({ enableCodebaseIndexing: checked })
-        } catch (err) {
-            await showError(t('settings.saveFailed'), t('settings.saveFailed') + ': ' + err)
-        }
+        await runKiroCommand('set_kiro_codebase_indexing', { enabled: checked }, { enableCodebaseIndexing: checked })
     }
 
     const handleTrustedCommandsModeChange = async (mode) => {
@@ -336,126 +304,59 @@ function Settings() {
     // Agent 设置处理函数
     const handleAgentAutonomyChange = async (mode) => {
         setAgentAutonomy(mode)
-        try {
-            await invoke('set_kiro_agent_autonomy', { autonomy: mode })
-        } catch (err) {
-            await showError(t('settings.saveFailed'), t('settings.saveFailed') + ': ' + err)
-        }
+        await runKiroCommand('set_kiro_agent_autonomy', { autonomy: mode })
     }
 
     const handleTabAutocompleteChange = async (checked) => {
         setEnableTabAutocomplete(checked)
-        try {
-            await invoke('set_kiro_tab_autocomplete', { enabled: checked })
-            await saveAppSettings({ enableTabAutocomplete: checked })
-        } catch (err) {
-            await showError(t('settings.saveFailed'), t('settings.saveFailed') + ': ' + err)
-        }
+        await runKiroCommand('set_kiro_tab_autocomplete', { enabled: checked }, { enableTabAutocomplete: checked })
     }
 
     const handleUsageSummaryChange = async (checked) => {
         setUsageSummary(checked)
-        try {
-            await invoke('set_kiro_usage_summary', { enabled: checked })
-            await saveAppSettings({ usageSummary: checked })
-        } catch (err) {
-            await showError(t('settings.saveFailed'), t('settings.saveFailed') + ': ' + err)
-        }
+        await runKiroCommand('set_kiro_usage_summary', { enabled: checked }, { usageSummary: checked })
     }
 
     const handleCodeReferencesChange = async (checked) => {
         setCodeReferences(checked)
-        try {
-            await invoke('set_kiro_code_references', { enabled: checked })
-            await saveAppSettings({ codeReferences: checked })
-        } catch (err) {
-            await showError(t('settings.saveFailed'), t('settings.saveFailed') + ': ' + err)
-        }
+        await runKiroCommand('set_kiro_code_references', { enabled: checked }, { codeReferences: checked })
     }
 
     const handleDebugLogsChange = async (checked) => {
         setEnableDebugLogs(checked)
-        try {
-            await invoke('set_kiro_debug_logs', { enabled: checked })
-            await saveAppSettings({ enableDebugLogs: checked })
-        } catch (err) {
-            await showError(t('settings.saveFailed'), t('settings.saveFailed') + ': ' + err)
-        }
+        await runKiroCommand('set_kiro_debug_logs', { enabled: checked }, { enableDebugLogs: checked })
     }
 
     // 通知设置处理函数
     const handleNotificationChange = async (key, checked, setter) => {
         setter(checked)
-        try {
-            await invoke('set_kiro_notification', { key, enabled: checked })
-            // 根据 key 保存到对应的 app-settings 字段
-            const fieldMap = {
-                'kiroAgent.notifications.agent.actionRequired': 'notifyActionRequired',
-                'kiroAgent.notifications.agent.failure': 'notifyFailure',
-                'kiroAgent.notifications.agent.success': 'notifySuccess',
-                'kiroAgent.notifications.billing': 'notifyBilling'
-            }
-            const field = fieldMap[key]
-            if (field) {
-                await saveAppSettings({ [field]: checked })
-            }
-        } catch (err) {
-            await showError(t('settings.saveFailed'), t('settings.saveFailed') + ': ' + err)
-        }
+        const field = NOTIFICATION_SETTINGS_FIELD_MAP[key]
+        await runKiroCommand('set_kiro_notification', { key, enabled: checked }, field ? { [field]: checked } : null)
     }
 
     // 信任工具处理（逗号分隔字符串 → 数组）
     const handleTrustedToolsSave = async (value) => {
         setTrustedTools(value)
         const tools = value.split(',').map(s => s.trim()).filter(Boolean)
-        try {
-            await invoke('set_kiro_trusted_tools', { tools })
-            await saveAppSettings({ trustedTools: tools })
-        } catch (err) {
-            await showError(t('settings.saveFailed'), t('settings.saveFailed') + ': ' + err)
-        }
+        await runKiroCommand('set_kiro_trusted_tools', { tools }, { trustedTools: tools })
     }
 
     // 代码引用追踪
     const handleReferenceTrackerChange = async (checked) => {
         setReferenceTracker(checked)
-        try {
-            await invoke('set_kiro_reference_tracker', { enabled: checked })
-            await saveAppSettings({ referenceTracker: checked })
-        } catch (err) {
-            await showError(t('settings.saveFailed'), t('settings.saveFailed') + ': ' + err)
-        }
+        await runKiroCommand('set_kiro_reference_tracker', { enabled: checked }, { referenceTracker: checked })
     }
 
     // MCP 配置开关
     const handleConfigureMcpChange = async (mode) => {
         setConfigureMcp(mode)
-        try {
-            await invoke('set_kiro_configure_mcp', { mode })
-            await saveAppSettings({ configureMcp: mode })
-        } catch (err) {
-            await showError(t('settings.saveFailed'), t('settings.saveFailed') + ': ' + err)
-        }
+        await runKiroCommand('set_kiro_configure_mcp', { mode }, { configureMcp: mode })
     }
 
     // 遥测设置
     const handleTelemetryChange = async (ideKey, checked, setter, appField) => {
         setter(checked)
-        try {
-            await invoke('set_kiro_telemetry', { key: ideKey, enabled: checked })
-            await saveAppSettings({ [appField]: checked })
-        } catch (err) {
-            await showError(t('settings.saveFailed'), t('settings.saveFailed') + ': ' + err)
-        }
-    }
-
-    // 验证浏览器路径（基础检查）
-    const isValidBrowserPath = (path) => {
-        if (!path) return true // 允许空值（使用默认浏览器）
-        // 检查是否包含引号和可执行文件后缀
-        const hasValidSuffix = /\.(exe|cmd|bat|sh|app)($|\s|")/i.test(path)
-        const isQuoted = path.includes('"')
-        return hasValidSuffix || isQuoted || path.includes('/')
+        await runKiroCommand('set_kiro_telemetry', { key: ideKey, enabled: checked }, { [appField]: checked })
     }
 
     const handleApplyBrowser = async () => {
@@ -467,11 +368,15 @@ function Settings() {
 
         setSavingBrowser(true)
         try {
-            await saveAppSettings({ browserPath: browserPath })
+            const nextSettings = await saveAppSettings({ browserPath: browserPath })
+            if (!nextSettings) {
+                return
+            }
             setOriginalBrowserPath(browserPath)
             await showSuccess(t('settings.saveSuccess'), browserPath ? t('settings.browserSaved') : t('settings.defaultBrowser'))
         } catch (err) {
-            await showError(t('settings.saveFailed'), t('settings.saveFailed') + ': ' + err)
+            const errorInfo = buildSettingsErrorMessage(t, err)
+            await showError(errorInfo.title, errorInfo.message)
         } finally {
             setSavingBrowser(false)
         }
@@ -553,19 +458,8 @@ function Settings() {
         }
     }
 
-    // 格式化时间戳
-    const formatTimestamp = (ts) => {
-        if (!ts) return '-'
-        const date = new Date(ts * 1000)
-        return date.toLocaleDateString('zh-CN', { year: 'numeric', month: '2-digit', day: '2-digit' })
-    }
-
-    const themeOptions = [
-        { key: 'light', name: t('settings.light'), icon: Sun, color: 'from-blue-400 to-blue-600' },
-        { key: 'dark', name: t('settings.dark'), icon: Moon, color: 'from-gray-700 to-gray-900' },
-        { key: 'purple', name: t('settings.purple'), icon: Palette, color: 'from-purple-500 to-purple-700' },
-        { key: 'green', name: t('settings.green'), icon: Palette, color: 'from-emerald-500 to-emerald-700' },
-    ]
+    const themeIconMap = { Sun, Moon, Palette }
+    const themeOptions = buildThemeOptions(t)
 
     // 复制到剪贴板
     const [copiedField, setCopiedField] = useState(null)
@@ -649,7 +543,7 @@ function Settings() {
                         </div>
                         <div className="grid grid-cols-2 sm:grid-cols-4 gap-2 w-full">
                             {themeOptions.map((opt) => {
-                                const Icon = opt.icon
+                                const Icon = themeIconMap[opt.iconName]
                                 const isActive = theme === opt.key
                                 return (
                                     <button
@@ -1163,7 +1057,7 @@ function Settings() {
                         <h2 className={`text-lg font-semibold ${colors.text}`}>{t('settings.systemMachineGuid')}</h2>
                         {systemMachineInfo?.osType && (
                             <span className={`text-xs px-2 py-0.5 rounded-full ${colors.textMuted} border ${colors.cardBorder} ${colors.cardSecondary}`}>
-                                {resolveOsLabel(systemMachineInfo.osType)}
+                                {resolveOsLabel(systemMachineInfo.osType, t('common.unknown'))}
                             </span>
                         )}
                     </div>

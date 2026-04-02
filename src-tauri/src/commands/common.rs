@@ -1,7 +1,19 @@
 // 公共工具函数 - 提取重复逻辑
 
 use crate::account::Account;
-use crate::providers::{AuthProvider, IdcProvider, RefreshMetadata, SocialProvider, KiroPortalClient};
+use crate::providers::{
+    AuthProvider, IdcProvider, KiroPortalClient, RefreshMetadata, SocialProvider,
+};
+
+pub async fn run_blocking_task<T, F>(task: F) -> Result<T, String>
+where
+    T: Send + 'static,
+    F: FnOnce() -> Result<T, String> + Send + 'static,
+{
+    tokio::task::spawn_blocking(task)
+        .await
+        .map_err(|e| e.to_string())?
+}
 
 /// Token 刷新结果
 pub struct RefreshResult {
@@ -21,9 +33,7 @@ pub struct UsageResult {
 }
 
 /// 根据 provider 刷新 token
-pub async fn refresh_token_by_provider(
-    account: &Account,
-) -> Result<RefreshResult, String> {
+pub async fn refresh_token_by_provider(account: &Account) -> Result<RefreshResult, String> {
     let provider = account.provider.as_deref().unwrap_or("Google");
     let refresh_token = account.refresh_token.as_ref().ok_or("No refresh token")?;
 
@@ -58,7 +68,9 @@ pub async fn refresh_token_by_provider(
             ..Default::default()
         };
         let social_provider = SocialProvider::new(provider);
-        let auth = social_provider.refresh_token(refresh_token, metadata).await?;
+        let auth = social_provider
+            .refresh_token(refresh_token, metadata)
+            .await?;
         Ok(RefreshResult {
             access_token: auth.access_token,
             refresh_token: Some(auth.refresh_token),
@@ -78,17 +90,17 @@ pub async fn get_usage_by_provider(
     // 统一使用 KiroPortalClient 的 GetUserUsageAndLimits 接口
     // provider 即 idp: Google / Github / BuilderId
     let client = KiroPortalClient::new()?;
-    let usage_call = client.get_user_usage_and_limits(access_token, provider).await;
+    let usage_call = client
+        .get_user_usage_and_limits(access_token, provider)
+        .await;
     parse_usage_result(usage_call)
 }
 
 /// 解析 usage 结果，提取封禁状态和认证错误
-fn parse_usage_result(
-    result: Result<serde_json::Value, String>,
-) -> Result<UsageResult, String> {
+fn parse_usage_result(result: Result<serde_json::Value, String>) -> Result<UsageResult, String> {
     match result {
         Ok(usage_data) => Ok(UsageResult {
-            usage_data,  // 直接使用 JSON Value
+            usage_data, // 直接使用 JSON Value
             is_banned: false,
             is_auth_error: false,
         }),
@@ -137,18 +149,18 @@ pub fn calc_status(is_banned: bool, is_auth_error: bool) -> String {
 /// 从 `usage_data` 中简单提取 `email` 和 `user_id`（不依赖结构体）
 pub fn extract_user_info(usage_data: &serde_json::Value) -> (Option<String>, Option<String>) {
     let user_info = usage_data.get("userInfo");
-    
+
     let email = user_info
         .and_then(|u| u.get("email"))
         .and_then(|e| e.as_str())
         .filter(|s| !s.is_empty())
         .map(std::string::ToString::to_string);
-    
+
     let user_id = user_info
         .and_then(|u| u.get("userId"))
         .and_then(|id| id.as_str())
         .map(std::string::ToString::to_string);
-    
+
     (email, user_id)
 }
 
@@ -163,17 +175,74 @@ pub fn find_existing_account_idx(
 ) -> Option<usize> {
     // 只用 user_id 去重
     if let Some(uid) = user_id {
-        return accounts.iter().position(|a| {
-            a.user_id.as_ref() == Some(uid)
-        });
+        return accounts
+            .iter()
+            .position(|a| a.user_id.as_ref() == Some(uid));
     }
-    
+
     // 如果没有 user_id，用 email 兜底
     if let Some(e) = email {
-        return accounts.iter().position(|a| {
-            a.email.as_ref() == Some(e)
-        });
+        return accounts.iter().position(|a| a.email.as_ref() == Some(e));
     }
-    
+
     None
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{extract_user_info, find_existing_account_idx, parse_usage_result};
+    use crate::account::Account;
+
+    #[test]
+    fn parse_usage_result_maps_banned_and_auth_errors_without_failing() {
+        let banned = parse_usage_result(Err("BANNED: blocked".to_string())).unwrap();
+        assert!(banned.is_banned);
+        assert!(!banned.is_auth_error);
+        assert_eq!(banned.usage_data, serde_json::Value::Null);
+
+        let auth_error = parse_usage_result(Err("AUTH_ERROR: token expired".to_string())).unwrap();
+        assert!(!auth_error.is_banned);
+        assert!(auth_error.is_auth_error);
+        assert_eq!(auth_error.usage_data, serde_json::Value::Null);
+    }
+
+    #[test]
+    fn extract_user_info_ignores_empty_email_and_reads_user_id() {
+        let usage = serde_json::json!({
+            "userInfo": {
+                "email": "",
+                "userId": "user-123"
+            }
+        });
+
+        assert_eq!(
+            extract_user_info(&usage),
+            (None, Some("user-123".to_string()))
+        );
+    }
+
+    #[test]
+    fn find_existing_account_idx_prefers_user_id_then_email() {
+        let mut first = Account::new("first@example.com".to_string(), "first".to_string());
+        first.user_id = Some("user-1".to_string());
+
+        let second = Account::new("second@example.com".to_string(), "second".to_string());
+        let accounts = vec![first, second];
+
+        let user_id = "user-1".to_string();
+        let second_email = "second@example.com".to_string();
+
+        assert_eq!(
+            find_existing_account_idx(&accounts, Some(&second_email), "Google", "", Some(&user_id)),
+            Some(0)
+        );
+        assert_eq!(
+            find_existing_account_idx(&accounts, Some(&second_email), "Google", "", None),
+            Some(1)
+        );
+        assert_eq!(
+            find_existing_account_idx(&accounts, None, "Google", "", None),
+            None
+        );
+    }
 }

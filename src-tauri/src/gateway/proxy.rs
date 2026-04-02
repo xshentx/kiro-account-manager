@@ -27,7 +27,8 @@ use crate::{
     },
     commands::machine_guid::get_machine_id,
     http_client::{
-        build_kiro_custom_user_agent, resolve_kiro_upstream_region,
+        build_kiro_custom_user_agent, is_external_idp_auth_method,
+        resolve_kiro_upstream_region, should_add_redirect_for_internal,
         should_send_codewhisperer_optout,
     },
 };
@@ -52,6 +53,7 @@ use super::{
 struct UpstreamCredentials {
     access_token: String,
     profile_arn: Option<String>,
+    provider: Option<String>,
     region: String,
     source_label: String,
     user_agent: String,
@@ -797,6 +799,7 @@ async fn execute_request_with_server_tools(
             content: Some(Value::Array(tool_result_blocks)),
             tool_calls: None,
             tool_call_id: None,
+            metadata: None,
         });
     }
 
@@ -847,10 +850,6 @@ async fn send_generate_request<T: serde::Serialize + ?Sized>(
     Ok(upstream_resp)
 }
 
-fn is_external_idp_auth_method(auth_method: Option<&str>) -> bool {
-    auth_method.is_some_and(|value| value.trim().eq_ignore_ascii_case("external_idp"))
-}
-
 fn with_kiro_upstream_headers(
     builder: reqwest::RequestBuilder,
     upstream: &UpstreamCredentials,
@@ -883,6 +882,9 @@ fn with_kiro_upstream_headers(
     }
     if is_external_idp_auth_method(upstream.auth_method.as_deref()) {
         builder = builder.header("TokenType", "EXTERNAL_IDP");
+    }
+    if should_add_redirect_for_internal(upstream.provider.as_deref()) {
+        builder = builder.header("redirect-for-internal", "true");
     }
 
     builder
@@ -996,6 +998,17 @@ fn normalized_assistant_message_from_aggregated(
             )
         },
         tool_call_id: None,
+        metadata: if aggregated.thinking.is_empty() {
+            None
+        } else {
+            Some(json!({
+                "reasoningContent": {
+                    "reasoningText": {
+                        "text": aggregated.thinking
+                    }
+                }
+            }))
+        },
     }
 }
 
@@ -1252,6 +1265,7 @@ async fn resolve_managed_account_credentials(
                 return Ok(UpstreamCredentials {
                     access_token: refresh.access_token,
                     profile_arn,
+                    provider: account.provider.clone(),
                     region,
                     source_label: format_managed_upstream_source(config, account),
                     user_agent: build_kiro_custom_user_agent(&machine_id),
@@ -3133,6 +3147,7 @@ mod tests {
         let upstream = UpstreamCredentials {
             access_token: "token-1".to_string(),
             profile_arn: None,
+            provider: None,
             region: "us-east-1".to_string(),
             source_label: "single:test".to_string(),
             user_agent: "KiroIDE 0.11.34 machine-123".to_string(),
@@ -3195,6 +3210,7 @@ mod tests {
             Some("EXTERNAL_IDP")
         );
         assert!(request.headers().get("x-amzn-kiro-profile-arn").is_none());
+        assert!(request.headers().get("redirect-for-internal").is_none());
     }
 
     #[test]
@@ -3202,6 +3218,7 @@ mod tests {
         let upstream = UpstreamCredentials {
             access_token: "token-2".to_string(),
             profile_arn: None,
+            provider: None,
             region: "us-east-1".to_string(),
             source_label: "single:test".to_string(),
             user_agent: "KiroIDE 0.11.34 machine-456".to_string(),
@@ -3235,6 +3252,7 @@ mod tests {
         assert!(request.headers().get("x-amzn-kiro-agent-mode").is_none());
         assert!(request.headers().get("TokenType").is_none());
         assert!(request.headers().get("x-amzn-kiro-profile-arn").is_none());
+        assert!(request.headers().get("redirect-for-internal").is_none());
     }
 
     #[test]
@@ -3244,6 +3262,7 @@ mod tests {
             profile_arn: Some(
                 "arn:aws:codewhisperer:us-east-1:123456789012:profile/test".to_string(),
             ),
+            provider: None,
             region: "us-east-1".to_string(),
             source_label: "single:test".to_string(),
             user_agent: "KiroIDE 0.11.34 machine-789".to_string(),
@@ -3269,5 +3288,73 @@ mod tests {
                 .and_then(|value| value.to_str().ok()),
             Some("arn:aws:codewhisperer:us-east-1:123456789012:profile/test")
         );
+        assert!(request.headers().get("redirect-for-internal").is_none());
+    }
+
+    #[test]
+    fn with_kiro_upstream_headers_adds_redirect_for_internal_only_for_internal_provider() {
+        let upstream = UpstreamCredentials {
+            access_token: "token-4".to_string(),
+            profile_arn: None,
+            provider: Some("Internal".to_string()),
+            region: "us-east-1".to_string(),
+            source_label: "single:test".to_string(),
+            user_agent: "KiroIDE 0.11.34 machine-999".to_string(),
+            auth_method: Some("IdC".to_string()),
+            send_opt_out: true,
+        };
+
+        let request = with_kiro_upstream_headers(
+            reqwest::Client::new()
+                .post("https://q.us-east-1.amazonaws.com/generateAssistantResponse"),
+            &upstream,
+            "application/vnd.amazon.eventstream",
+            true,
+            true,
+            false,
+        )
+        .build()
+        .expect("request should build");
+
+        assert_eq!(
+            request
+                .headers()
+                .get("redirect-for-internal")
+                .and_then(|value| value.to_str().ok()),
+            Some("true")
+        );
+    }
+
+    #[test]
+    fn with_kiro_upstream_headers_does_not_add_redirect_for_enterprise_or_builderid() {
+        for provider in ["Enterprise", "BuilderId"] {
+            let upstream = UpstreamCredentials {
+                access_token: "token-5".to_string(),
+                profile_arn: None,
+                provider: Some(provider.to_string()),
+                region: "us-east-1".to_string(),
+                source_label: "single:test".to_string(),
+                user_agent: "KiroIDE 0.11.34 machine-1000".to_string(),
+                auth_method: Some("IdC".to_string()),
+                send_opt_out: true,
+            };
+
+            let request = with_kiro_upstream_headers(
+                reqwest::Client::new()
+                    .post("https://q.us-east-1.amazonaws.com/generateAssistantResponse"),
+                &upstream,
+                "application/vnd.amazon.eventstream",
+                true,
+                true,
+                false,
+            )
+            .build()
+            .expect("request should build");
+
+            assert!(
+                request.headers().get("redirect-for-internal").is_none(),
+                "provider {provider} should not add redirect-for-internal"
+            );
+        }
     }
 }

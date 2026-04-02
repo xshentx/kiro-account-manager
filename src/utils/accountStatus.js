@@ -1,48 +1,105 @@
 const ACTIVE_STATUSES = new Set(['active', '正常', '有效'])
+const CAPPED_STATUSES = new Set(['capped', '封顶'])
 const BANNED_STATUSES = new Set(['banned', '封禁', '已封禁'])
 const INVALID_STATUSES = new Set(['invalid', '失效', '已失效', 'Token已失效', 'token已失效'])
 const EXPIRED_STATUSES = new Set(['expired', '过期', '已过期'])
 
-export function normalizeAccountStatus(status) {
+function resolveStatusInput(statusOrAccount, usageData) {
+  if (statusOrAccount && typeof statusOrAccount === 'object' && !Array.isArray(statusOrAccount)) {
+    return {
+      status: statusOrAccount.status,
+      usageData: statusOrAccount.usageData,
+    }
+  }
+
+  return {
+    status: statusOrAccount,
+    usageData,
+  }
+}
+
+function getUsageNumber(source, integerKey, preciseKey) {
+  const precise = source?.[preciseKey]
+  if (typeof precise === 'number') return precise
+
+  const integer = source?.[integerKey]
+  if (typeof integer === 'number') return integer
+
+  return null
+}
+
+export function isUsageCapped(usageData) {
+  const breakdown = usageData?.usageBreakdownList?.[0]
+  if (!breakdown) return false
+
+  const overageStatus = usageData?.overageConfiguration?.overageStatus
+  if (overageStatus !== 'DISABLED') return false
+
+  const currentUsage = getUsageNumber(breakdown, 'currentUsage', 'currentUsageWithPrecision')
+  const usageLimit = getUsageNumber(breakdown, 'usageLimit', 'usageLimitWithPrecision')
+
+  if (typeof currentUsage !== 'number' || typeof usageLimit !== 'number' || usageLimit <= 0) {
+    return false
+  }
+
+  return currentUsage >= usageLimit
+}
+
+export function normalizeAccountStatus(statusOrAccount, usageData) {
+  const { status, usageData: resolvedUsageData } = resolveStatusInput(statusOrAccount, usageData)
   if (!status) return 'unknown'
-  if (ACTIVE_STATUSES.has(status)) return 'active'
-  if (BANNED_STATUSES.has(status)) return 'banned'
-  if (INVALID_STATUSES.has(status)) return 'invalid'
-  if (EXPIRED_STATUSES.has(status)) return 'expired'
-  return status
+
+  let normalized = status
+  if (ACTIVE_STATUSES.has(status)) normalized = 'active'
+  else if (CAPPED_STATUSES.has(status)) normalized = 'capped'
+  else if (BANNED_STATUSES.has(status)) normalized = 'banned'
+  else if (INVALID_STATUSES.has(status)) normalized = 'invalid'
+  else if (EXPIRED_STATUSES.has(status)) normalized = 'expired'
+
+  if (normalized === 'active' && isUsageCapped(resolvedUsageData)) {
+    return 'capped'
+  }
+
+  return normalized
 }
 
-export function isActiveStatus(status) {
-  return normalizeAccountStatus(status) === 'active'
+export function isActiveStatus(statusOrAccount, usageData) {
+  return normalizeAccountStatus(statusOrAccount, usageData) === 'active'
 }
 
-export function isBannedStatus(status) {
-  return normalizeAccountStatus(status) === 'banned'
+export function isCappedStatus(statusOrAccount, usageData) {
+  return normalizeAccountStatus(statusOrAccount, usageData) === 'capped'
 }
 
-export function isInvalidStatus(status) {
-  return normalizeAccountStatus(status) === 'invalid'
+export function isBannedStatus(statusOrAccount, usageData) {
+  return normalizeAccountStatus(statusOrAccount, usageData) === 'banned'
 }
 
-export function isExpiredStatus(status) {
-  return normalizeAccountStatus(status) === 'expired'
+export function isInvalidStatus(statusOrAccount, usageData) {
+  return normalizeAccountStatus(statusOrAccount, usageData) === 'invalid'
 }
 
-export function isUnavailableStatus(status) {
-  const normalized = normalizeAccountStatus(status)
-  return normalized === 'banned' || normalized === 'invalid' || normalized === 'expired'
+export function isExpiredStatus(statusOrAccount, usageData) {
+  return normalizeAccountStatus(statusOrAccount, usageData) === 'expired'
 }
 
-export function isAvailableStatus(status) {
-  return !isUnavailableStatus(status)
+export function isUnavailableStatus(statusOrAccount, usageData) {
+  const normalized = normalizeAccountStatus(statusOrAccount, usageData)
+  return normalized === 'capped' || normalized === 'banned' || normalized === 'invalid' || normalized === 'expired'
 }
 
-export function getAccountStatusMeta(status, t) {
-  const normalized = normalizeAccountStatus(status)
+export function isAvailableStatus(statusOrAccount, usageData) {
+  return !isUnavailableStatus(statusOrAccount, usageData)
+}
+
+export function getAccountStatusMeta(statusOrAccount, t, usageData) {
+  const normalized = normalizeAccountStatus(statusOrAccount, usageData)
 
   switch (normalized) {
     case 'active':
       return { key: 'active', label: t?.('accounts.active') ?? '正常', tone: 'success' }
+    case 'capped':
+      return { key: 'capped', label: '封顶', tone: 'warning' }
     case 'banned':
       return { key: 'banned', label: t?.('accounts.banned') ?? '封禁', tone: 'danger' }
     case 'invalid':
@@ -50,6 +107,7 @@ export function getAccountStatusMeta(status, t) {
     case 'expired':
       return { key: 'expired', label: t?.('accounts.expired') ?? '过期', tone: 'warning' }
     default:
+      const { status } = resolveStatusInput(statusOrAccount, usageData)
       return { key: normalized, label: status || (t?.('common.unknown') ?? '未知'), tone: 'warning' }
   }
 }

@@ -54,7 +54,7 @@ impl KiroAuthServiceClient {
         );
 
         let login_url = login_url.trim().to_string();
-        
+
         open_browser(&login_url)?;
 
         Ok(())
@@ -96,18 +96,17 @@ impl KiroAuthServiceClient {
             .bytes()
             .await
             .map_err(|e| format!("Kiro Auth Service read body failed: {e}"))?;
-        
+
         let body_str = String::from_utf8_lossy(&bytes);
-        
+
         if !status.is_success() {
             return Err(format!(
                 "Kiro Auth Service token creation failed: {status} - {body_str}"
             ));
         }
 
-        serde_json::from_slice::<T>(&bytes).map_err(|e| format!(
-            "Kiro Auth Service token creation parse failed: {e}"
-        ))
+        serde_json::from_slice::<T>(&bytes)
+            .map_err(|e| format!("Kiro Auth Service token creation parse failed: {e}"))
     }
 
     /// 刷新访问令牌
@@ -149,8 +148,7 @@ impl KiroAuthServiceClient {
             ));
         }
 
-        serde_json::from_slice::<T>(&bytes).map_err(|e| format!(
-            "Kiro Auth Service token refresh parse failed: {e}"
-        ))
+        serde_json::from_slice::<T>(&bytes)
+            .map_err(|e| format!("Kiro Auth Service token refresh parse failed: {e}"))
     }
 }

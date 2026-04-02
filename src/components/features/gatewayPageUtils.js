@@ -161,11 +161,11 @@ export const buildClientSamples = (baseUrl, apiKey) => {
   const safeKey = apiKey || 'sk-your-gateway-api-key'
   const anthropicEnv = `ANTHROPIC_BASE_URL=${baseUrl}\nANTHROPIC_API_KEY=${safeKey}`
   const openaiEnv = `OPENAI_BASE_URL=${baseUrl}\nOPENAI_API_KEY=${safeKey}`
-  const openaiCurl = [
+  const openaiResponsesCurl = [
     `curl ${baseUrl}/v1/responses \\`,
     '  -H "Content-Type: application/json" \\',
     `  -H "Authorization: Bearer ${safeKey}" \\`,
-    '  -d "{\\"model\\":\\"gpt-4.1\\",\\"input\\":[{\\"role\\":\\"user\\",\\"content\\":[{\\"type\\":\\"input_text\\",\\"text\\":\\"hello\\"}]}]}"',
+    '  -d "{\\"model\\":\\"claude-sonnet-4-5-20250929\\",\\"input\\":[{\\"role\\":\\"user\\",\\"content\\":[{\\"type\\":\\"input_text\\",\\"text\\":\\"hello\\"}]}]}"',
   ].join('\n')
 
   return {
@@ -174,7 +174,7 @@ export const buildClientSamples = (baseUrl, apiKey) => {
     },
     openai: {
       env: openaiEnv,
-      curl: openaiCurl,
+      curl: openaiResponsesCurl,
     },
   }
 }

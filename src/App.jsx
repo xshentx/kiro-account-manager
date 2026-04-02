@@ -55,14 +55,14 @@ function App() {
 
   useEffect(() => {
     checkAuth()
-    
+
     // 检查是否是回调页面
     const url = new URL(window.location.href)
     if (url.pathname === '/callback' && (url.searchParams.has('code') || url.searchParams.has('state'))) {
       setActiveMenu('callback')
       return
     }
-    
+
     let unlisten = null
     let unlistenSettings = null
     let unlistenAppSettings = null

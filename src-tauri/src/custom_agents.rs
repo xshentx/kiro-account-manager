@@ -45,12 +45,10 @@ impl CustomAgentsManager {
 
                 let metadata = fs::metadata(&path).ok();
                 let size = metadata.as_ref().map_or(0, std::fs::Metadata::len);
-                let modified_at = metadata
-                    .and_then(|m| m.modified().ok())
-                    .map(|t| {
-                        let datetime: chrono::DateTime<chrono::Local> = t.into();
-                        datetime.format("%Y/%m/%d %H:%M:%S").to_string()
-                    });
+                let modified_at = metadata.and_then(|m| m.modified().ok()).map(|t| {
+                    let datetime: chrono::DateTime<chrono::Local> = t.into();
+                    datetime.format("%Y/%m/%d %H:%M:%S").to_string()
+                });
 
                 let content = fs::read_to_string(&path).unwrap_or_default();
 
@@ -124,7 +122,11 @@ impl CustomAgentsManager {
         Ok(all_files)
     }
 
-    pub fn load(file_name: &str, scope: &str, project_dir: Option<&str>) -> Result<CustomAgentFile, String> {
+    pub fn load(
+        file_name: &str,
+        scope: &str,
+        project_dir: Option<&str>,
+    ) -> Result<CustomAgentFile, String> {
         let dir = Self::resolve_dir(scope, project_dir)?;
         let path = Self::safe_agent_path(&dir, file_name)?;
 
@@ -132,17 +134,14 @@ impl CustomAgentsManager {
             return Err(format!("Agent 文件不存在: {file_name}"));
         }
 
-        let content =
-            fs::read_to_string(&path).map_err(|e| format!("读取文件失败: {e}"))?;
+        let content = fs::read_to_string(&path).map_err(|e| format!("读取文件失败: {e}"))?;
 
         let metadata = fs::metadata(&path).ok();
         let size = metadata.as_ref().map_or(0, std::fs::Metadata::len);
-        let modified_at = metadata
-            .and_then(|m| m.modified().ok())
-            .map(|t| {
-                let datetime: chrono::DateTime<chrono::Local> = t.into();
-                datetime.format("%Y/%m/%d %H:%M:%S").to_string()
-            });
+        let modified_at = metadata.and_then(|m| m.modified().ok()).map(|t| {
+            let datetime: chrono::DateTime<chrono::Local> = t.into();
+            datetime.format("%Y/%m/%d %H:%M:%S").to_string()
+        });
 
         Ok(CustomAgentFile {
             file_name: file_name.to_string(),
@@ -153,7 +152,12 @@ impl CustomAgentsManager {
         })
     }
 
-    pub fn save(file_name: &str, content: &str, scope: &str, project_dir: Option<&str>) -> Result<(), String> {
+    pub fn save(
+        file_name: &str,
+        content: &str,
+        scope: &str,
+        project_dir: Option<&str>,
+    ) -> Result<(), String> {
         let dir = Self::resolve_dir(scope, project_dir)?;
         fs::create_dir_all(&dir).ok();
 
@@ -172,7 +176,12 @@ impl CustomAgentsManager {
         Ok(())
     }
 
-    pub fn create(file_name: &str, content: &str, scope: &str, project_dir: Option<&str>) -> Result<CustomAgentFile, String> {
+    pub fn create(
+        file_name: &str,
+        content: &str,
+        scope: &str,
+        project_dir: Option<&str>,
+    ) -> Result<CustomAgentFile, String> {
         let dir = Self::resolve_dir(scope, project_dir)?;
         fs::create_dir_all(&dir).ok();
 

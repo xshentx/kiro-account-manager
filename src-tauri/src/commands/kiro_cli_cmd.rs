@@ -65,8 +65,10 @@ fn create_account_label(
     if is_new {
         format!("从 kiro-cli 导入 ({token_key})")
     } else {
-        existing_account
-            .map_or_else(|| format!("从 kiro-cli 导入 ({token_key})"), |a| a.label.clone())
+        existing_account.map_or_else(
+            || format!("从 kiro-cli 导入 ({token_key})"),
+            |a| a.label.clone(),
+        )
     }
 }
 
@@ -94,28 +96,36 @@ pub fn get_kiro_cli_default_path() -> Result<String, String> {
     let mut candidates = Vec::new();
 
     if cfg!(target_os = "macos") {
-        candidates.push(std::path::PathBuf::from(&home)
-            .join("Library")
-            .join("Application Support")
-            .join("kiro-cli")
-            .join("data.sqlite3"));
+        candidates.push(
+            std::path::PathBuf::from(&home)
+                .join("Library")
+                .join("Application Support")
+                .join("kiro-cli")
+                .join("data.sqlite3"),
+        );
     } else if cfg!(target_os = "windows") {
-        candidates.push(std::path::PathBuf::from(&home)
-            .join(".local")
-            .join("share")
-            .join("kiro-cli")
-            .join("data.sqlite3"));
+        candidates.push(
+            std::path::PathBuf::from(&home)
+                .join(".local")
+                .join("share")
+                .join("kiro-cli")
+                .join("data.sqlite3"),
+        );
     } else {
         if let Ok(xdg_data_home) = std::env::var("XDG_DATA_HOME") {
-            candidates.push(std::path::PathBuf::from(xdg_data_home)
-                .join("kiro-cli")
-                .join("data.sqlite3"));
+            candidates.push(
+                std::path::PathBuf::from(xdg_data_home)
+                    .join("kiro-cli")
+                    .join("data.sqlite3"),
+            );
         }
-        candidates.push(std::path::PathBuf::from(&home)
-            .join(".local")
-            .join("share")
-            .join("kiro-cli")
-            .join("data.sqlite3"));
+        candidates.push(
+            std::path::PathBuf::from(&home)
+                .join(".local")
+                .join("share")
+                .join("kiro-cli")
+                .join("data.sqlite3"),
+        );
     }
 
     for path in candidates {
@@ -141,15 +151,15 @@ pub async fn import_from_kiro_cli(
 
     // 1. 读取 kiro-cli 数据库
     let cli_accounts = read_kiro_cli_accounts(&expanded_path)?;
-    
+
     if cli_accounts.is_empty() {
         return Err("数据库中没有账号数据".to_string());
     }
-    
+
     if cli_accounts.len() > 1 {
         return Err("数据库中有多个账号，请联系开发者".to_string());
     }
-    
+
     let cli_account = &cli_accounts[0];
     let auth_method = &cli_account.auth_method;
     let token_key = &cli_account.token_key;
@@ -157,25 +167,27 @@ pub async fn import_from_kiro_cli(
 
     // 2. 调用 Kiro Portal API 获取配额
     let portal_client = KiroPortalClient::new()?;
-    
+
     // 判断 idp（根据 auth_method）
     let idp = if cli_account.auth_method == "social" {
         "social"
     } else {
         "idc"
     };
-    
+
     let usage_result = portal_client
         .get_user_usage_and_limits(&cli_account.access_token, idp)
         .await;
 
     let (email, user_id, provider, usage_data) = match usage_result {
         Ok(usage) => {
-            let email = usage.get("email")
+            let email = usage
+                .get("email")
                 .and_then(|v| v.as_str())
                 .map(std::string::ToString::to_string);
-            
-            let user_id = usage.get("userId")
+
+            let user_id = usage
+                .get("userId")
                 .and_then(|v| v.as_str())
                 .map(std::string::ToString::to_string);
 
@@ -201,7 +213,7 @@ pub async fn import_from_kiro_cli(
     // 4. 创建或更新 Account
     let existing_account = existing_index.and_then(|idx| store.accounts.get(idx));
     let label = create_account_label(is_new, &cli_account.token_key, existing_account);
-    
+
     let mut account = if let Some(e) = email.clone() {
         Account::new(e, label)
     } else if let Some(uid) = user_id.clone() {
@@ -237,7 +249,9 @@ pub async fn import_from_kiro_cli(
     // 7. 生成或保留 machine_id
     if let Some(idx) = existing_index {
         // 更新现有账号，保留 machine_id
-        account.machine_id.clone_from(&store.accounts[idx].machine_id);
+        account
+            .machine_id
+            .clone_from(&store.accounts[idx].machine_id);
         account.id.clone_from(&store.accounts[idx].id);
         store.accounts[idx] = account.clone();
     } else {

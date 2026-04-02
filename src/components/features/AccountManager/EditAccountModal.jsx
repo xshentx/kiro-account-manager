@@ -101,7 +101,7 @@ function GroupSelector({ groups, value, onChange, onGroupsChange }) {
 }
 
 function EditAccountModal({ account, onClose, onSuccess }) {
-
+  const { t, colors, theme } = useApp()
   const accent = getThemeAccent(theme)
   const { showError } = useDialog()
   const isIdCAccount = account.provider === 'BuilderId' || account.provider === 'Enterprise'

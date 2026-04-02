@@ -68,8 +68,8 @@ codegen-units = 256  # 增加并行编译单元
 
 # 发布配置：优化二进制体积
 [profile.release]
-codegen-units = 1    # 允许 LLVM 更好的优化
-lto = "fat"          # 启用最激进的链接时优化（比 true 更强）
-opt-level = "z"      # 最小体积优化（比 "s" 更激进）
+codegen-units = 8    # 平衡本地打包速度与产物体积
+lto = "thin"         # 保留链接时优化，但避免 fat LTO 的高耗时
+opt-level = "s"      # 优先减小体积，同时避免 z 级别优化带来的额外编译成本
 panic = "abort"      # 禁用 panic 处理器，提升性能
 strip = true         # 移除符号信息，减小体积

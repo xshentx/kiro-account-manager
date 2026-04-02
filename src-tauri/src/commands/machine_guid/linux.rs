@@ -22,14 +22,19 @@ fn read_machine_id() -> Result<String, String> {
 fn write_with_pkexec(raw_id: &str) -> Result<(), String> {
     let mut child = Command::new("pkexec")
         .args(["tee", "/etc/machine-id"])
-        .stdin(Stdio::piped()).stdout(Stdio::null()).stderr(Stdio::piped())
-        .spawn().map_err(|e| format!("执行 pkexec 失败: {}", e))?;
-    
+        .stdin(Stdio::piped())
+        .stdout(Stdio::null())
+        .stderr(Stdio::piped())
+        .spawn()
+        .map_err(|e| format!("执行 pkexec 失败: {}", e))?;
+
     if let Some(stdin) = child.stdin.as_mut() {
         stdin.write_all(format!("{}\n", raw_id).as_bytes()).ok();
     }
-    let output = child.wait_with_output().map_err(|e| format!("等待 pkexec 失败: {}", e))?;
-    
+    let output = child
+        .wait_with_output()
+        .map_err(|e| format!("等待 pkexec 失败: {}", e))?;
+
     if !output.status.success() {
         let stderr = String::from_utf8_lossy(&output.stderr);
         if stderr.contains("dismissed") || stderr.contains("Not authorized") {
@@ -44,9 +49,11 @@ pub fn get_system_machine_guid_inner() -> Result<SystemMachineInfo, String> {
     let (backup_exists, backup_time) = read_backup_info();
     Ok(SystemMachineInfo {
         machine_guid: Some(format_as_uuid(&read_machine_id()?)),
-        backup_exists, backup_time,
+        backup_exists,
+        backup_time,
         os_type: "linux".to_string(),
-        can_modify: true, requires_admin: true,
+        can_modify: true,
+        requires_admin: true,
     })
 }
 
@@ -54,7 +61,9 @@ pub fn backup_machine_guid_inner() -> Result<MachineGuidBackup, String> {
     let backup = MachineGuidBackup {
         machine_guid: format_as_uuid(&read_machine_id()?),
         backup_time: Local::now().format("%Y-%m-%d %H:%M:%S").to_string(),
-        computer_name: std::env::var("HOSTNAME").ok().or_else(|| std::env::var("USER").ok()),
+        computer_name: std::env::var("HOSTNAME")
+            .ok()
+            .or_else(|| std::env::var("USER").ok()),
         os_type: Some("linux".to_string()),
     };
     save_backup(&backup)?;
@@ -82,4 +91,6 @@ pub fn set_custom_machine_guid_inner(new_guid: String) -> Result<String, String>
     Ok(format_as_uuid(&raw_id))
 }
 
-pub fn clear_override_inner() -> Result<(), String> { Ok(()) }
+pub fn clear_override_inner() -> Result<(), String> {
+    Ok(())
+}

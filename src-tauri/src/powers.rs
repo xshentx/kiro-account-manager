@@ -104,7 +104,8 @@ impl PowersManager {
         if !path.exists() {
             return Ok(InstalledPowersFile::default());
         }
-        let content = fs::read_to_string(&path).map_err(|e| format!("读取 installed.json 失败: {e}"))?;
+        let content =
+            fs::read_to_string(&path).map_err(|e| format!("读取 installed.json 失败: {e}"))?;
         serde_json::from_str(&content).map_err(|e| format!("解析 installed.json 失败: {e}"))
     }
 
@@ -123,16 +124,31 @@ impl PowersManager {
 
         let mut fm = PowerFrontMatter::default();
         if let Some(s) = fm_str {
-            if let Some(v) = Self::extract_field(&s, "name") { fm.name = v; }
-            if let Some(v) = Self::extract_field(&s, "description") { fm.description = v; }
-            if let Some(v) = Self::extract_field(&s, "author") { fm.author = v; }
-            if let Some(v) = Self::extract_field(&s, "license") { fm.license = v; }
-            if let Some(v) = Self::extract_field(&s, "displayName") { fm.display_name = v; }
+            if let Some(v) = Self::extract_field(&s, "name") {
+                fm.name = v;
+            }
+            if let Some(v) = Self::extract_field(&s, "description") {
+                fm.description = v;
+            }
+            if let Some(v) = Self::extract_field(&s, "author") {
+                fm.author = v;
+            }
+            if let Some(v) = Self::extract_field(&s, "license") {
+                fm.license = v;
+            }
+            if let Some(v) = Self::extract_field(&s, "displayName") {
+                fm.display_name = v;
+            }
             // keywords: [k1, k2]
-            if let Some(kw) = regex::Regex::new(r"keywords:\s*\[([^\]]*)\]").ok()
+            if let Some(kw) = regex::Regex::new(r"keywords:\s*\[([^\]]*)\]")
+                .ok()
                 .and_then(|r| r.captures(&s).map(|c| c[1].to_string()))
             {
-                fm.keywords = kw.split(',').map(|k| k.trim().trim_matches(|c| c == '"' || c == '\'').to_string()).filter(|k| !k.is_empty()).collect();
+                fm.keywords = kw
+                    .split(',')
+                    .map(|k| k.trim().trim_matches(|c| c == '"' || c == '\'').to_string())
+                    .filter(|k| !k.is_empty())
+                    .collect();
             }
         }
         fm
@@ -140,7 +156,8 @@ impl PowersManager {
 
     fn extract_field(s: &str, field: &str) -> Option<String> {
         let pattern = format!(r#"{}:\s*['"]?([^'"\n]+)['"]?"#, field);
-        regex::Regex::new(&pattern).ok()
+        regex::Regex::new(&pattern)
+            .ok()
             .and_then(|r| r.captures(s).map(|c| c[1].trim().to_string()))
     }
 
@@ -154,12 +171,11 @@ impl PowersManager {
         // mcp.json: { "mcpServers": { "name": {...}, ... } }
         let parsed: Result<serde_json::Value, _> = serde_json::from_str(&content);
         match parsed {
-            Ok(v) => {
-                v.get("mcpServers")
-                    .and_then(|s| s.as_object())
-                    .map(|obj| obj.keys().cloned().collect())
-                    .unwrap_or_default()
-            }
+            Ok(v) => v
+                .get("mcpServers")
+                .and_then(|s| s.as_object())
+                .map(|obj| obj.keys().cloned().collect())
+                .unwrap_or_default(),
             Err(_) => vec![],
         }
     }
@@ -185,17 +201,27 @@ impl PowersManager {
 
     /// 计算目录大小
     fn dir_size(dir: &PathBuf) -> u64 {
-        if !dir.exists() { return 0; }
-        fs::read_dir(dir).ok().map(|entries| {
-            entries.filter_map(Result::ok).map(|e| {
-                let p = e.path();
-                if p.is_file() {
-                    fs::metadata(&p).map(|m| m.len()).unwrap_or(0)
-                } else if p.is_dir() {
-                    Self::dir_size(&p)
-                } else { 0 }
-            }).sum()
-        }).unwrap_or(0)
+        if !dir.exists() {
+            return 0;
+        }
+        fs::read_dir(dir)
+            .ok()
+            .map(|entries| {
+                entries
+                    .filter_map(Result::ok)
+                    .map(|e| {
+                        let p = e.path();
+                        if p.is_file() {
+                            fs::metadata(&p).map(|m| m.len()).unwrap_or(0)
+                        } else if p.is_dir() {
+                            Self::dir_size(&p)
+                        } else {
+                            0
+                        }
+                    })
+                    .sum()
+            })
+            .unwrap_or(0)
     }
 
     fn validate_power_name(name: &str) -> Result<(), String> {
@@ -225,13 +251,30 @@ impl PowersManager {
         if branch.starts_with('-') {
             return Err("分支名非法".to_string());
         }
-        if branch.contains('\0') || branch.contains(' ') || branch.contains('\t') || branch.contains('\n') || branch.contains('\r') {
+        if branch.contains('\0')
+            || branch.contains(' ')
+            || branch.contains('\t')
+            || branch.contains('\n')
+            || branch.contains('\r')
+        {
             return Err("分支名非法".to_string());
         }
-        if branch.contains("..") || branch.contains("~") || branch.contains("^") || branch.contains(":") || branch.contains('?') || branch.contains('*') || branch.contains("\\") {
+        if branch.contains("..")
+            || branch.contains("~")
+            || branch.contains("^")
+            || branch.contains(":")
+            || branch.contains('?')
+            || branch.contains('*')
+            || branch.contains("\\")
+        {
             return Err("分支名非法".to_string());
         }
-        if branch.ends_with('.') || branch.ends_with('/') || branch.ends_with(".lock") || branch.contains("@{") || branch.contains("//") {
+        if branch.ends_with('.')
+            || branch.ends_with('/')
+            || branch.ends_with(".lock")
+            || branch.contains("@{")
+            || branch.contains("//")
+        {
             return Err("分支名非法".to_string());
         }
         Ok(())
@@ -239,8 +282,7 @@ impl PowersManager {
 
     fn validate_clone_url(url: &str) -> Result<(), String> {
         let https_url = Self::convert_to_https_url(url);
-        let parsed = reqwest::Url::parse(&https_url)
-            .map_err(|_| "仓库 URL 非法".to_string())?;
+        let parsed = reqwest::Url::parse(&https_url).map_err(|_| "仓库 URL 非法".to_string())?;
 
         if parsed.scheme() != "https" {
             return Err("仅允许 https 仓库地址".to_string());
@@ -251,7 +293,11 @@ impl PowersManager {
             return Err("仅允许 github.com 仓库地址".to_string());
         }
 
-        let mut segs = parsed.path().trim_start_matches('/').split('/').filter(|s| !s.is_empty());
+        let mut segs = parsed
+            .path()
+            .trim_start_matches('/')
+            .split('/')
+            .filter(|s| !s.is_empty());
         let owner = segs.next().unwrap_or_default();
         let repo = segs.next().unwrap_or_default();
         if owner.is_empty() || repo.is_empty() {
@@ -303,7 +349,9 @@ impl PowersManager {
         let installed_file = Self::load_installed()?;
 
         // 建立 name -> entry 映射
-        let entry_map: HashMap<String, &InstalledPowerEntry> = installed_file.installed_powers.iter()
+        let entry_map: HashMap<String, &InstalledPowerEntry> = installed_file
+            .installed_powers
+            .iter()
             .map(|e| (e.name.clone(), e))
             .collect();
 
@@ -313,12 +361,19 @@ impl PowersManager {
             return Ok(powers);
         }
 
-        for entry in fs::read_dir(&installed_dir).map_err(|e| format!("读取 installed 目录失败: {e}"))? {
+        for entry in
+            fs::read_dir(&installed_dir).map_err(|e| format!("读取 installed 目录失败: {e}"))?
+        {
             let entry = entry.map_err(|e| format!("读取条目失败: {e}"))?;
             let path = entry.path();
-            if !path.is_dir() { continue; }
+            if !path.is_dir() {
+                continue;
+            }
 
-            let name = path.file_name().map(|n| n.to_string_lossy().to_string()).unwrap_or_default();
+            let name = path
+                .file_name()
+                .map(|n| n.to_string_lossy().to_string())
+                .unwrap_or_default();
             let power_md_path = path.join("POWER.md");
             let power_md = fs::read_to_string(&power_md_path).unwrap_or_default();
             let fm = Self::parse_power_md(&power_md);
@@ -326,7 +381,11 @@ impl PowersManager {
             let installed_entry = entry_map.get(&name);
 
             powers.push(PowerInfo {
-                display_name: if fm.display_name.is_empty() { fm.name.clone() } else { fm.display_name.clone() },
+                display_name: if fm.display_name.is_empty() {
+                    fm.name.clone()
+                } else {
+                    fm.display_name.clone()
+                },
                 description: fm.description,
                 author: fm.author,
                 license: fm.license,
@@ -355,14 +414,21 @@ impl PowersManager {
         }
 
         let installed_file = Self::load_installed()?;
-        let installed_entry = installed_file.installed_powers.iter().find(|e| e.name == name);
+        let installed_entry = installed_file
+            .installed_powers
+            .iter()
+            .find(|e| e.name == name);
 
         let power_md_path = power_dir.join("POWER.md");
         let power_md = fs::read_to_string(&power_md_path).unwrap_or_default();
         let fm = Self::parse_power_md(&power_md);
 
         Ok(PowerInfo {
-            display_name: if fm.display_name.is_empty() { fm.name.clone() } else { fm.display_name.clone() },
+            display_name: if fm.display_name.is_empty() {
+                fm.name.clone()
+            } else {
+                fm.display_name.clone()
+            },
             description: fm.description,
             author: fm.author,
             license: fm.license,
@@ -381,7 +447,12 @@ impl PowersManager {
     /// 1. git clone 到 ~/.kiro/powers/repos/<name>/
     /// 2. 只复制 POWER.md, mcp.json, steering/*.md 到 ~/.kiro/powers/installed/<name>/
     /// 3. 更新 installed.json
-    pub fn install(name: &str, clone_url: &str, path_in_repo: &str, branch: &str) -> Result<(), String> {
+    pub fn install(
+        name: &str,
+        clone_url: &str,
+        path_in_repo: &str,
+        branch: &str,
+    ) -> Result<(), String> {
         let dir = Self::powers_dir().ok_or("无法获取用户目录")?;
 
         Self::validate_power_name(name)?;
@@ -403,7 +474,11 @@ impl PowersManager {
             let _ = fs::remove_dir_all(&clone_path);
         }
 
-        let branch_arg = if branch.is_empty() { "main".to_string() } else { branch.to_string() };
+        let branch_arg = if branch.is_empty() {
+            "main".to_string()
+        } else {
+            branch.to_string()
+        };
 
         // 转换 SSH URL 为 HTTPS（与 Kiro 的 convertToHttpsUrl 一致）
         let https_url = Self::convert_to_https_url(clone_url);
@@ -412,7 +487,15 @@ impl PowersManager {
             .map_err(|e| format!("创建 repos 目录失败: {e}"))?;
 
         let output = std::process::Command::new("git")
-            .args(["clone", "--depth", "1", "--single-branch", "--branch", &branch_arg, &https_url])
+            .args([
+                "clone",
+                "--depth",
+                "1",
+                "--single-branch",
+                "--branch",
+                &branch_arg,
+                &https_url,
+            ])
             .arg(&clone_path)
             .output()
             .map_err(|e| format!("执行 git clone 失败（请确保已安装 git）: {e}"))?;
@@ -431,10 +514,10 @@ impl PowersManager {
             return Err(format!("仓库中未找到路径: {path_in_repo}"));
         }
 
-        let clone_path_canonical = fs::canonicalize(&clone_path)
-            .map_err(|e| format!("解析仓库目录失败: {e}"))?;
-        let source_path_canonical = fs::canonicalize(&source_path)
-            .map_err(|e| format!("解析仓库内路径失败: {e}"))?;
+        let clone_path_canonical =
+            fs::canonicalize(&clone_path).map_err(|e| format!("解析仓库目录失败: {e}"))?;
+        let source_path_canonical =
+            fs::canonicalize(&source_path).map_err(|e| format!("解析仓库内路径失败: {e}"))?;
 
         if !source_path_canonical.starts_with(&clone_path_canonical) {
             let _ = fs::remove_dir_all(&clone_path);
@@ -496,8 +579,8 @@ impl PowersManager {
             let entry = entry.map_err(|e| format!("读取条目失败: {e}"))?;
             let src_path = entry.path();
             let dst_path = dst.join(entry.file_name());
-            let metadata = fs::symlink_metadata(&src_path)
-                .map_err(|e| format!("读取文件元信息失败: {e}"))?;
+            let metadata =
+                fs::symlink_metadata(&src_path).map_err(|e| format!("读取文件元信息失败: {e}"))?;
             if metadata.file_type().is_symlink() {
                 continue;
             }
@@ -523,7 +606,11 @@ impl PowersManager {
         let mut installed = Self::load_installed()?;
         installed.installed_powers.retain(|e| e.name != name);
         // 加入 dismissed 列表防止自动重装
-        if !installed.dismissed_auto_installs.iter().any(|d| d.name == name) {
+        if !installed
+            .dismissed_auto_installs
+            .iter()
+            .any(|d| d.name == name)
+        {
             installed.dismissed_auto_installs.push(DismissedEntry {
                 name: name.to_string(),
                 registry_id: String::new(),
@@ -543,21 +630,38 @@ impl PowersManager {
         }
 
         let mut registries = vec![];
-        for entry in fs::read_dir(&reg_dir).map_err(|e| format!("读取 registries 目录失败: {e}"))? {
+        for entry in fs::read_dir(&reg_dir).map_err(|e| format!("读取 registries 目录失败: {e}"))?
+        {
             let entry = entry.map_err(|e| format!("读取条目失败: {e}"))?;
             let path = entry.path();
-            if !path.is_file() || path.extension().is_none_or(|e| e != "json") { continue; }
+            if !path.is_file() || path.extension().is_none_or(|e| e != "json") {
+                continue;
+            }
 
-            let file_name = path.file_name().map(|n| n.to_string_lossy().to_string()).unwrap_or_default();
+            let file_name = path
+                .file_name()
+                .map(|n| n.to_string_lossy().to_string())
+                .unwrap_or_default();
             let id = file_name.trim_end_matches(".json").to_string();
             let content = fs::read_to_string(&path).unwrap_or_default();
             let parsed: serde_json::Value = serde_json::from_str(&content).unwrap_or_default();
 
             registries.push(RegistryInfo {
                 id,
-                name: parsed.get("name").and_then(|v| v.as_str()).unwrap_or("").to_string(),
-                registry_type: parsed.get("type").and_then(|v| v.as_str()).unwrap_or("unknown").to_string(),
-                power_count: parsed.get("powers").and_then(|v| v.as_array()).map_or(0, |a| a.len()),
+                name: parsed
+                    .get("name")
+                    .and_then(|v| v.as_str())
+                    .unwrap_or("")
+                    .to_string(),
+                registry_type: parsed
+                    .get("type")
+                    .and_then(|v| v.as_str())
+                    .unwrap_or("unknown")
+                    .to_string(),
+                power_count: parsed
+                    .get("powers")
+                    .and_then(|v| v.as_array())
+                    .map_or(0, |a| a.len()),
             });
         }
         Ok(registries)
@@ -611,7 +715,8 @@ pub struct RecommendedRegistryResponse {
     pub powers: Vec<RecommendedPower>,
 }
 
-const RECOMMENDED_REGISTRY_URL: &str = "https://prod.download.desktop.kiro.dev/powers/default_registry.json";
+const RECOMMENDED_REGISTRY_URL: &str =
+    "https://prod.download.desktop.kiro.dev/powers/default_registry.json";
 
 impl PowersManager {
     /// 拉取推荐 Powers 列表，并标记已安装状态
@@ -652,7 +757,8 @@ impl PowersManager {
             .unwrap_or_default();
 
         for power in &mut registry.powers {
-            power.installed = installed_names.contains(&power.name) || installed_dir_names.contains(&power.name);
+            power.installed =
+                installed_names.contains(&power.name) || installed_dir_names.contains(&power.name);
         }
 
         Ok(registry.powers)

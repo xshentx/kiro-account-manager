@@ -133,9 +133,9 @@ function AccountTable({
 
   // 生成菜单项
   const getMenuItems = useCallback((account) => {
-    const isBanned = isBannedStatus(account.status)
-    const isUnavailable = isUnavailableStatus(account.status)
-    const statusMeta = getAccountStatusMeta(account.status, t)
+    const isBanned = isBannedStatus(account)
+    const isUnavailable = isUnavailableStatus(account)
+    const statusMeta = getAccountStatusMeta(account, t)
     const rowState = accountRowStateById?.[account.id] ?? {}
 
     const items = [

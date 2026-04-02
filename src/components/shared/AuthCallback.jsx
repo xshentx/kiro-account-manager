@@ -12,7 +12,6 @@ export default function AuthCallback() {
     
     const handleCallback = async () => {
       try {
-        // 从 URL 获取 code 和 state
         const url = new URL(window.location.href)
         const code = url.searchParams.get('code')
         const state = url.searchParams.get('state')
@@ -26,13 +25,11 @@ export default function AuthCallback() {
         setStatus('processing')
         setMessage(t('callback.exchangingToken'))
 
-        // 调用 Rust 处理回调
-        await invoke('handle_kiro_social_callback', { code, state })
+        await invoke('handle_kiro_social_callback', { code, callbackState: state })
 
         setStatus('success')
         setMessage(t('callback.success'))
 
-        // 3秒后关闭窗口
         setTimeout(() => {
           window.close()
         }, 3000)

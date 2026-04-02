@@ -414,7 +414,7 @@ function ImportAccountModal({ onClose, onSuccess, onNavigate }) {
           error: result.error || '导入失败'
         })
       }
-
+    } catch (e) {
       setKiroCliResult({
         success: false,
         error: String(e)

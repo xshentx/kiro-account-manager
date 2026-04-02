@@ -139,12 +139,10 @@ impl HooksManager {
 
             let metadata = fs::metadata(&path).ok();
             let size = metadata.as_ref().map_or(0, std::fs::Metadata::len);
-            let modified_at = metadata
-                .and_then(|m| m.modified().ok())
-                .map(|t| {
-                    let datetime: chrono::DateTime<chrono::Local> = t.into();
-                    datetime.format("%Y/%m/%d %H:%M:%S").to_string()
-                });
+            let modified_at = metadata.and_then(|m| m.modified().ok()).map(|t| {
+                let datetime: chrono::DateTime<chrono::Local> = t.into();
+                datetime.format("%Y/%m/%d %H:%M:%S").to_string()
+            });
 
             files.push(HookFile {
                 file_name,
@@ -208,12 +206,10 @@ impl HooksManager {
 
         let metadata = fs::metadata(&path).ok();
         let size = metadata.as_ref().map_or(0, std::fs::Metadata::len);
-        let modified_at = metadata
-            .and_then(|m| m.modified().ok())
-            .map(|t| {
-                let datetime: chrono::DateTime<chrono::Local> = t.into();
-                datetime.format("%Y/%m/%d %H:%M:%S").to_string()
-            });
+        let modified_at = metadata.and_then(|m| m.modified().ok()).map(|t| {
+            let datetime: chrono::DateTime<chrono::Local> = t.into();
+            datetime.format("%Y/%m/%d %H:%M:%S").to_string()
+        });
 
         Ok(HookFile {
             file_name: file_name.to_string(),
@@ -240,7 +236,11 @@ impl HooksManager {
         Ok(())
     }
 
-    pub fn create(file_name: &str, content: &str, project_dir: Option<&str>) -> Result<HookFile, String> {
+    pub fn create(
+        file_name: &str,
+        content: &str,
+        project_dir: Option<&str>,
+    ) -> Result<HookFile, String> {
         let dir = Self::require_project_dir(project_dir)?;
         fs::create_dir_all(&dir).ok();
         let path = Self::safe_hook_path(&dir, file_name)?;

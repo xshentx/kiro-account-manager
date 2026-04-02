@@ -10,7 +10,7 @@ import { applyFilters } from './utils/filterUtils'
 import { cn } from '../../../utils/cn'
 import { showSuccess, showError } from '../../../utils/toast.jsx'
 import { getAccountDisplayName } from '../../../utils/accountStats'
-import { isActiveStatus, isBannedStatus, isExpiredStatus, isInvalidStatus } from '../../../utils/accountStatus'
+import { normalizeAccountStatus } from '../../../utils/accountStatus'
 import { getThemeAccent } from '../KiroConfig/themeAccent'
 import AccountHeader from './AccountHeader'
 import AccountTable from './AccountTable'
@@ -303,10 +303,7 @@ function AccountManager({ onNavigate }) {
          selectedTag === '__has__' ? tagIds.length > 0 :
          tagIds.includes(selectedTag))
       const matchStatus = !selectedStatus ||
-        (selectedStatus === 'active' && isActiveStatus(account.status)) ||
-        (selectedStatus === 'banned' && isBannedStatus(account.status)) ||
-        (selectedStatus === 'invalid' && isInvalidStatus(account.status)) ||
-        (selectedStatus === 'expired' && isExpiredStatus(account.status))
+        normalizeAccountStatus(account) === selectedStatus
       return matchSearch && matchGroup && matchTag && matchStatus
     })
 

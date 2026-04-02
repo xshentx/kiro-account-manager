@@ -7,15 +7,15 @@ use std::path::PathBuf;
 #[serde(rename_all = "camelCase")]
 pub struct AppSettings {
     pub theme: Option<String>,
-    pub locale: Option<String>,  // 界面语言
+    pub locale: Option<String>, // 界面语言
     pub lock_model: Option<bool>,
     pub locked_model: Option<String>,
     pub auto_refresh: Option<bool>,
     pub auto_refresh_interval: Option<i32>,
-    pub auto_change_machine_id: Option<bool>,  // 切换账号时是否更换机器码（默认 true）
+    pub auto_change_machine_id: Option<bool>, // 切换账号时是否更换机器码（默认 true）
     pub browser_path: Option<String>,
     // 账户机器码绑定功能
-    pub bind_machine_id_to_account: Option<bool>,  // true=绑定模式（每个账号固定机器码），false=随机模式
+    pub bind_machine_id_to_account: Option<bool>, // true=绑定模式（每个账号固定机器码），false=随机模式
     // 隐私模式：脱敏显示邮箱
     pub privacy_mode: Option<bool>,
     // 自动换号设置
@@ -54,10 +54,10 @@ impl Default for AppSettings {
             locked_model: Some("claude-opus-4.5".to_string()),
             auto_refresh: Some(true),
             auto_refresh_interval: Some(50),
-            auto_change_machine_id: Some(true),  // 默认开启
+            auto_change_machine_id: Some(true), // 默认开启
             browser_path: None,
             bind_machine_id_to_account: Some(true),
-            privacy_mode: Some(true),  // 默认开启
+            privacy_mode: Some(true), // 默认开启
             // 自动换号默认值
             auto_switch_enabled: Some(false),
             auto_switch_threshold: Some(1.0),
@@ -83,17 +83,78 @@ impl Default for AppSettings {
     }
 }
 
+impl AppSettings {
+    fn apply_updates(&mut self, updates: Self) {
+        macro_rules! apply_if_some {
+            ($field:ident) => {
+                if updates.$field.is_some() {
+                    self.$field = updates.$field;
+                }
+            };
+        }
+
+        apply_if_some!(theme);
+        apply_if_some!(locale);
+        apply_if_some!(lock_model);
+        apply_if_some!(locked_model);
+        apply_if_some!(auto_refresh);
+        apply_if_some!(auto_refresh_interval);
+        apply_if_some!(auto_change_machine_id);
+        apply_if_some!(browser_path);
+        apply_if_some!(bind_machine_id_to_account);
+        apply_if_some!(privacy_mode);
+        apply_if_some!(auto_switch_enabled);
+        apply_if_some!(auto_switch_threshold);
+        apply_if_some!(auto_switch_interval);
+        apply_if_some!(enable_codebase_indexing);
+        apply_if_some!(enable_tab_autocomplete);
+        apply_if_some!(usage_summary);
+        apply_if_some!(code_references);
+        apply_if_some!(enable_debug_logs);
+        apply_if_some!(notify_action_required);
+        apply_if_some!(notify_failure);
+        apply_if_some!(notify_success);
+        apply_if_some!(notify_billing);
+        apply_if_some!(trusted_tools);
+        apply_if_some!(reference_tracker);
+        apply_if_some!(configure_mcp);
+        apply_if_some!(telemetry_content_collection);
+        apply_if_some!(telemetry_usage_analytics);
+        apply_if_some!(telemetry_edit_stats);
+        apply_if_some!(telemetry_feedback);
+    }
+}
+
 fn get_data_dir() -> PathBuf {
-    dirs::data_dir().unwrap_or_else(|| {
-        let home = std::env::var("USERPROFILE")
-            .or_else(|_| std::env::var("HOME"))
-            .unwrap_or_else(|_| ".".to_string());
-        PathBuf::from(home)
-    }).join(".kiro-account-manager")
+    dirs::data_dir()
+        .unwrap_or_else(|| {
+            let home = std::env::var("USERPROFILE")
+                .or_else(|_| std::env::var("HOME"))
+                .unwrap_or_else(|_| ".".to_string());
+            PathBuf::from(home)
+        })
+        .join(".kiro-account-manager")
 }
 
 fn get_app_settings_path() -> PathBuf {
     get_data_dir().join("app-settings.json")
+}
+
+fn ensure_parent_dir(path: &std::path::Path) -> Result<(), String> {
+    if let Some(parent) = path.parent() {
+        std::fs::create_dir_all(parent).map_err(|e| format!("创建目录失败: {e}"))?;
+    }
+    Ok(())
+}
+
+async fn run_blocking_io<T, F>(task: F) -> Result<T, String>
+where
+    T: Send + 'static,
+    F: FnOnce() -> Result<T, String> + Send + 'static,
+{
+    tokio::task::spawn_blocking(task)
+        .await
+        .map_err(|e| format!("Task failed: {e}"))?
 }
 
 pub fn get_app_settings_inner() -> Result<AppSettings, String> {
@@ -104,76 +165,33 @@ pub fn get_app_settings_inner() -> Result<AppSettings, String> {
         save_settings_to_file(&default_settings)?;
         return Ok(default_settings);
     }
-    let content = std::fs::read_to_string(&path)
-        .map_err(|e| format!("读取设置失败: {e}"))?;
-    serde_json::from_str(&content)
-        .map_err(|e| format!("解析设置失败: {e}"))
+    let content = std::fs::read_to_string(&path).map_err(|e| format!("读取设置失败: {e}"))?;
+    serde_json::from_str(&content).map_err(|e| format!("解析设置失败: {e}"))
 }
 
 pub fn save_settings_to_file(settings: &AppSettings) -> Result<(), String> {
     let path = get_app_settings_path();
-    if let Some(parent) = path.parent() {
-        std::fs::create_dir_all(parent).ok();
-    }
-    let content = serde_json::to_string_pretty(settings)
-        .map_err(|e| format!("序列化失败: {e}"))?;
-    std::fs::write(&path, content)
-        .map_err(|e| format!("写入失败: {e}"))
+    ensure_parent_dir(&path)?;
+    let content = serde_json::to_string_pretty(settings).map_err(|e| format!("序列化失败: {e}"))?;
+    std::fs::write(&path, content).map_err(|e| format!("写入失败: {e}"))
 }
 
 fn save_app_settings_inner(updates: AppSettings) -> Result<(), String> {
     let mut current = get_app_settings_inner().unwrap_or_default();
-    
-    // 只更新传入的非 None 字段
-    if updates.theme.is_some() { current.theme = updates.theme; }
-    if updates.locale.is_some() { current.locale = updates.locale; }
-    if updates.lock_model.is_some() { current.lock_model = updates.lock_model; }
-    if updates.locked_model.is_some() { current.locked_model = updates.locked_model; }
-    if updates.auto_refresh.is_some() { current.auto_refresh = updates.auto_refresh; }
-    if updates.auto_refresh_interval.is_some() { current.auto_refresh_interval = updates.auto_refresh_interval; }
-    if updates.auto_change_machine_id.is_some() { current.auto_change_machine_id = updates.auto_change_machine_id; }
-    if updates.browser_path.is_some() { current.browser_path = updates.browser_path; }
-    if updates.bind_machine_id_to_account.is_some() { current.bind_machine_id_to_account = updates.bind_machine_id_to_account; }
-    if updates.privacy_mode.is_some() { current.privacy_mode = updates.privacy_mode; }
 
-    // 自动换号设置
-    if updates.auto_switch_enabled.is_some() { current.auto_switch_enabled = updates.auto_switch_enabled; }
-    if updates.auto_switch_threshold.is_some() { current.auto_switch_threshold = updates.auto_switch_threshold; }
-    if updates.auto_switch_interval.is_some() { current.auto_switch_interval = updates.auto_switch_interval; }
+    current.apply_updates(updates);
 
-    // Kiro IDE 开关设置
-    if updates.enable_codebase_indexing.is_some() { current.enable_codebase_indexing = updates.enable_codebase_indexing; }
-    if updates.enable_tab_autocomplete.is_some() { current.enable_tab_autocomplete = updates.enable_tab_autocomplete; }
-    if updates.usage_summary.is_some() { current.usage_summary = updates.usage_summary; }
-    if updates.code_references.is_some() { current.code_references = updates.code_references; }
-    if updates.enable_debug_logs.is_some() { current.enable_debug_logs = updates.enable_debug_logs; }
-    if updates.notify_action_required.is_some() { current.notify_action_required = updates.notify_action_required; }
-    if updates.notify_failure.is_some() { current.notify_failure = updates.notify_failure; }
-    if updates.notify_success.is_some() { current.notify_success = updates.notify_success; }
-    if updates.notify_billing.is_some() { current.notify_billing = updates.notify_billing; }
-    if updates.trusted_tools.is_some() { current.trusted_tools = updates.trusted_tools; }
-    if updates.reference_tracker.is_some() { current.reference_tracker = updates.reference_tracker; }
-    if updates.configure_mcp.is_some() { current.configure_mcp = updates.configure_mcp; }
-    if updates.telemetry_content_collection.is_some() { current.telemetry_content_collection = updates.telemetry_content_collection; }
-    if updates.telemetry_usage_analytics.is_some() { current.telemetry_usage_analytics = updates.telemetry_usage_analytics; }
-    if updates.telemetry_edit_stats.is_some() { current.telemetry_edit_stats = updates.telemetry_edit_stats; }
-    if updates.telemetry_feedback.is_some() { current.telemetry_feedback = updates.telemetry_feedback; }
-    
     save_settings_to_file(&current)
 }
 
 #[tauri::command]
 pub async fn get_app_settings() -> Result<AppSettings, String> {
-    tokio::task::spawn_blocking(get_app_settings_inner)
-        .await
-        .map_err(|e| format!("Task failed: {e}"))?
+    run_blocking_io(get_app_settings_inner).await
 }
 
 #[tauri::command]
 pub async fn save_app_settings(settings: AppSettings) -> Result<(), String> {
-    tokio::task::spawn_blocking(move || save_app_settings_inner(settings))
-        .await
-        .map_err(|e| format!("Task failed: {e}"))?
+    run_blocking_io(move || save_app_settings_inner(settings)).await
 }
 
 /// 获取自定义浏览器路径（供打开浏览器时使用）
@@ -189,7 +207,10 @@ pub fn get_browser_path() -> Option<String> {
 // ============================================================
 
 #[tauri::command]
-pub async fn bind_machine_id_to_account(_account_id: String, _machine_id: String) -> Result<(), String> {
+pub async fn bind_machine_id_to_account(
+    _account_id: String,
+    _machine_id: String,
+) -> Result<(), String> {
     // 已废弃：机器码现在存储在账号的 machine_id 字段
     Ok(())
 }
@@ -207,11 +228,11 @@ pub async fn get_bound_machine_id(_account_id: String) -> Result<Option<String>,
 }
 
 #[tauri::command]
-pub async fn get_all_bound_machine_ids() -> Result<std::collections::HashMap<String, String>, String> {
+pub async fn get_all_bound_machine_ids() -> Result<std::collections::HashMap<String, String>, String>
+{
     // 已废弃：机器码现在存储在账号的 machine_id 字段
     Ok(std::collections::HashMap::new())
 }
-
 
 // ============================================================
 // 使用量历史记录功能
@@ -220,7 +241,7 @@ pub async fn get_all_bound_machine_ids() -> Result<std::collections::HashMap<Str
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct UsageHistoryEntry {
-    pub date: String,           // YYYY-MM-DD
+    pub date: String, // YYYY-MM-DD
     pub total_quota: i32,
     pub total_used: i32,
     pub account_count: i32,
@@ -241,20 +262,11 @@ fn get_usage_history_inner() -> Result<UsageHistory, String> {
     if !path.exists() {
         return Ok(UsageHistory::default());
     }
-    let content = std::fs::read_to_string(&path)
-        .map_err(|e| format!("读取历史记录失败: {e}"))?;
-    serde_json::from_str(&content)
-        .map_err(|e| format!("解析历史记录失败: {e}"))
+    let content = std::fs::read_to_string(&path).map_err(|e| format!("读取历史记录失败: {e}"))?;
+    serde_json::from_str(&content).map_err(|e| format!("解析历史记录失败: {e}"))
 }
 
-fn save_usage_history_entry_inner(entry: UsageHistoryEntry) -> Result<(), String> {
-    let path = get_usage_history_path();
-    if let Some(parent) = path.parent() {
-        std::fs::create_dir_all(parent).ok();
-    }
-
-    let mut history = get_usage_history_inner().unwrap_or_default();
-
+fn merge_usage_history_entry(history: &mut UsageHistory, entry: UsageHistoryEntry) {
     // 如果当天已有记录，则更新；否则添加新记录
     if let Some(existing) = history.entries.iter_mut().find(|e| e.date == entry.date) {
         existing.total_quota = entry.total_quota;
@@ -268,26 +280,281 @@ fn save_usage_history_entry_inner(entry: UsageHistoryEntry) -> Result<(), String
     history.entries.sort_by(|a, b| a.date.cmp(&b.date));
     if history.entries.len() > 30 {
         let skip_count = history.entries.len() - 30;
-        history.entries = history.entries.into_iter().skip(skip_count).collect();
+        history.entries.drain(..skip_count);
     }
+}
 
-    let content = serde_json::to_string_pretty(&history)
-        .map_err(|e| format!("序列化失败: {e}"))?;
-    std::fs::write(&path, content)
-        .map_err(|e| format!("写入失败: {e}"))?;
+fn save_usage_history_entry_inner(entry: UsageHistoryEntry) -> Result<(), String> {
+    let path = get_usage_history_path();
+    ensure_parent_dir(&path)?;
+
+    let mut history = get_usage_history_inner().unwrap_or_default();
+    merge_usage_history_entry(&mut history, entry);
+
+    let content = serde_json::to_string_pretty(&history).map_err(|e| format!("序列化失败: {e}"))?;
+    std::fs::write(&path, content).map_err(|e| format!("写入失败: {e}"))?;
     Ok(())
 }
 
 #[tauri::command]
 pub async fn get_usage_history() -> Result<UsageHistory, String> {
-    tokio::task::spawn_blocking(get_usage_history_inner)
-        .await
-        .map_err(|e| format!("Task failed: {e}"))?
+    run_blocking_io(get_usage_history_inner).await
 }
 
 #[tauri::command]
 pub async fn save_usage_history_entry(entry: UsageHistoryEntry) -> Result<(), String> {
-    tokio::task::spawn_blocking(move || save_usage_history_entry_inner(entry))
-        .await
-        .map_err(|e| format!("Task failed: {e}"))?
+    run_blocking_io(move || save_usage_history_entry_inner(entry)).await
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{merge_usage_history_entry, AppSettings, UsageHistory, UsageHistoryEntry};
+
+    #[test]
+    fn apply_updates_only_overwrites_fields_provided_as_some() {
+        let mut current = AppSettings {
+            theme: Some("dark".to_string()),
+            locale: Some("zh-CN".to_string()),
+            lock_model: Some(true),
+            locked_model: Some("claude-opus-4.5".to_string()),
+            auto_refresh: Some(true),
+            auto_refresh_interval: Some(50),
+            auto_change_machine_id: Some(true),
+            browser_path: Some("C:/browser.exe".to_string()),
+            bind_machine_id_to_account: Some(true),
+            privacy_mode: Some(true),
+            auto_switch_enabled: Some(false),
+            auto_switch_threshold: Some(1.0),
+            auto_switch_interval: Some(5),
+            enable_codebase_indexing: Some(true),
+            enable_tab_autocomplete: Some(true),
+            usage_summary: Some(true),
+            code_references: Some(true),
+            enable_debug_logs: Some(false),
+            notify_action_required: Some(true),
+            notify_failure: Some(true),
+            notify_success: Some(true),
+            notify_billing: Some(true),
+            trusted_tools: Some(vec!["tool-a".to_string()]),
+            reference_tracker: Some(false),
+            configure_mcp: Some("Enabled".to_string()),
+            telemetry_content_collection: Some(false),
+            telemetry_usage_analytics: Some(false),
+            telemetry_edit_stats: Some(false),
+            telemetry_feedback: Some(false),
+        };
+
+        let updates = AppSettings {
+            theme: Some("light".to_string()),
+            locale: None,
+            lock_model: Some(false),
+            locked_model: None,
+            auto_refresh: None,
+            auto_refresh_interval: Some(30),
+            auto_change_machine_id: None,
+            browser_path: Some("D:/portable/browser.exe".to_string()),
+            bind_machine_id_to_account: None,
+            privacy_mode: Some(false),
+            auto_switch_enabled: Some(true),
+            auto_switch_threshold: None,
+            auto_switch_interval: None,
+            enable_codebase_indexing: Some(false),
+            enable_tab_autocomplete: None,
+            usage_summary: None,
+            code_references: Some(false),
+            enable_debug_logs: Some(true),
+            notify_action_required: None,
+            notify_failure: None,
+            notify_success: None,
+            notify_billing: Some(false),
+            trusted_tools: Some(vec!["tool-b".to_string(), "tool-c".to_string()]),
+            reference_tracker: Some(true),
+            configure_mcp: Some("Disabled".to_string()),
+            telemetry_content_collection: None,
+            telemetry_usage_analytics: Some(true),
+            telemetry_edit_stats: None,
+            telemetry_feedback: Some(true),
+        };
+
+        current.apply_updates(updates);
+
+        assert_eq!(current.theme.as_deref(), Some("light"));
+        assert_eq!(current.locale.as_deref(), Some("zh-CN"));
+        assert_eq!(current.lock_model, Some(false));
+        assert_eq!(current.locked_model.as_deref(), Some("claude-opus-4.5"));
+        assert_eq!(current.auto_refresh, Some(true));
+        assert_eq!(current.auto_refresh_interval, Some(30));
+        assert_eq!(
+            current.browser_path.as_deref(),
+            Some("D:/portable/browser.exe")
+        );
+        assert_eq!(current.privacy_mode, Some(false));
+        assert_eq!(current.auto_switch_enabled, Some(true));
+        assert_eq!(current.auto_switch_threshold, Some(1.0));
+        assert_eq!(current.enable_codebase_indexing, Some(false));
+        assert_eq!(current.code_references, Some(false));
+        assert_eq!(current.enable_debug_logs, Some(true));
+        assert_eq!(current.notify_billing, Some(false));
+        assert_eq!(
+            current.trusted_tools,
+            Some(vec!["tool-b".to_string(), "tool-c".to_string()])
+        );
+        assert_eq!(current.reference_tracker, Some(true));
+        assert_eq!(current.configure_mcp.as_deref(), Some("Disabled"));
+        assert_eq!(current.telemetry_content_collection, Some(false));
+        assert_eq!(current.telemetry_usage_analytics, Some(true));
+        assert_eq!(current.telemetry_edit_stats, Some(false));
+        assert_eq!(current.telemetry_feedback, Some(true));
+    }
+
+    #[test]
+    fn apply_updates_with_all_none_keeps_existing_values() {
+        let mut current = AppSettings::default();
+        let before = current.clone();
+
+        current.apply_updates(AppSettings {
+            theme: None,
+            locale: None,
+            lock_model: None,
+            locked_model: None,
+            auto_refresh: None,
+            auto_refresh_interval: None,
+            auto_change_machine_id: None,
+            browser_path: None,
+            bind_machine_id_to_account: None,
+            privacy_mode: None,
+            auto_switch_enabled: None,
+            auto_switch_threshold: None,
+            auto_switch_interval: None,
+            enable_codebase_indexing: None,
+            enable_tab_autocomplete: None,
+            usage_summary: None,
+            code_references: None,
+            enable_debug_logs: None,
+            notify_action_required: None,
+            notify_failure: None,
+            notify_success: None,
+            notify_billing: None,
+            trusted_tools: None,
+            reference_tracker: None,
+            configure_mcp: None,
+            telemetry_content_collection: None,
+            telemetry_usage_analytics: None,
+            telemetry_edit_stats: None,
+            telemetry_feedback: None,
+        });
+
+        assert_eq!(current.theme, before.theme);
+        assert_eq!(current.locale, before.locale);
+        assert_eq!(current.lock_model, before.lock_model);
+        assert_eq!(current.locked_model, before.locked_model);
+        assert_eq!(current.auto_refresh, before.auto_refresh);
+        assert_eq!(current.auto_refresh_interval, before.auto_refresh_interval);
+        assert_eq!(
+            current.auto_change_machine_id,
+            before.auto_change_machine_id
+        );
+        assert_eq!(current.browser_path, before.browser_path);
+        assert_eq!(
+            current.bind_machine_id_to_account,
+            before.bind_machine_id_to_account
+        );
+        assert_eq!(current.privacy_mode, before.privacy_mode);
+        assert_eq!(current.auto_switch_enabled, before.auto_switch_enabled);
+        assert_eq!(current.auto_switch_threshold, before.auto_switch_threshold);
+        assert_eq!(current.auto_switch_interval, before.auto_switch_interval);
+        assert_eq!(
+            current.enable_codebase_indexing,
+            before.enable_codebase_indexing
+        );
+        assert_eq!(
+            current.enable_tab_autocomplete,
+            before.enable_tab_autocomplete
+        );
+        assert_eq!(current.usage_summary, before.usage_summary);
+        assert_eq!(current.code_references, before.code_references);
+        assert_eq!(current.enable_debug_logs, before.enable_debug_logs);
+        assert_eq!(
+            current.notify_action_required,
+            before.notify_action_required
+        );
+        assert_eq!(current.notify_failure, before.notify_failure);
+        assert_eq!(current.notify_success, before.notify_success);
+        assert_eq!(current.notify_billing, before.notify_billing);
+        assert_eq!(current.trusted_tools, before.trusted_tools);
+        assert_eq!(current.reference_tracker, before.reference_tracker);
+        assert_eq!(current.configure_mcp, before.configure_mcp);
+        assert_eq!(
+            current.telemetry_content_collection,
+            before.telemetry_content_collection
+        );
+        assert_eq!(
+            current.telemetry_usage_analytics,
+            before.telemetry_usage_analytics
+        );
+        assert_eq!(current.telemetry_edit_stats, before.telemetry_edit_stats);
+        assert_eq!(current.telemetry_feedback, before.telemetry_feedback);
+    }
+
+    #[test]
+    fn merge_usage_history_entry_replaces_same_day_entry() {
+        let mut history = UsageHistory {
+            entries: vec![UsageHistoryEntry {
+                date: "2026-03-30".to_string(),
+                total_quota: 100,
+                total_used: 40,
+                account_count: 2,
+            }],
+        };
+
+        merge_usage_history_entry(
+            &mut history,
+            UsageHistoryEntry {
+                date: "2026-03-30".to_string(),
+                total_quota: 120,
+                total_used: 55,
+                account_count: 3,
+            },
+        );
+
+        assert_eq!(history.entries.len(), 1);
+        assert_eq!(history.entries[0].date, "2026-03-30");
+        assert_eq!(history.entries[0].total_quota, 120);
+        assert_eq!(history.entries[0].total_used, 55);
+        assert_eq!(history.entries[0].account_count, 3);
+    }
+
+    #[test]
+    fn merge_usage_history_entry_keeps_only_latest_thirty_sorted_days() {
+        let mut history = UsageHistory {
+            entries: (1..=30)
+                .map(|day| UsageHistoryEntry {
+                    date: format!("2026-03-{day:02}"),
+                    total_quota: day,
+                    total_used: day,
+                    account_count: 1,
+                })
+                .collect(),
+        };
+
+        merge_usage_history_entry(
+            &mut history,
+            UsageHistoryEntry {
+                date: "2026-03-31".to_string(),
+                total_quota: 31,
+                total_used: 31,
+                account_count: 1,
+            },
+        );
+
+        assert_eq!(history.entries.len(), 30);
+        assert_eq!(
+            history.entries.first().map(|entry| entry.date.as_str()),
+            Some("2026-03-02")
+        );
+        assert_eq!(
+            history.entries.last().map(|entry| entry.date.as_str()),
+            Some("2026-03-31")
+        );
+    }
 }

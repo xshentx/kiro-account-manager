@@ -18,8 +18,8 @@ export function useSwitchAccount(onLocalTokenChange) {
 
   // 显示切换确认弹窗
   const handleSwitchAccount = useCallback((account) => {
-    if (isUnavailableStatus(account.status)) {
-      const statusMeta = getAccountStatusMeta(account.status, t)
+    if (isUnavailableStatus(account)) {
+      const statusMeta = getAccountStatusMeta(account, t)
       setSwitchDialog({ type: 'error', title: t('switch.failed'), message: `账号当前状态为${statusMeta.label}，请重新登录或恢复后再切换`, account: null })
       return
     }

@@ -31,9 +31,11 @@ export function applyFilters(accounts, filters) {
 
     // 状态筛选
     if (filters.statuses?.length > 0) {
-      const normalizedStatus = normalizeAccountStatus(account.status)
+      const normalizedStatus = normalizeAccountStatus(account)
       let status = 'normal'
-      if (normalizedStatus === 'banned') {
+      if (normalizedStatus === 'capped') {
+        status = 'capped'
+      } else if (normalizedStatus === 'banned') {
         status = 'banned'
       } else if (normalizedStatus === 'invalid') {
         status = 'invalid'

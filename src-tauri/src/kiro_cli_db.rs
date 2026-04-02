@@ -12,7 +12,7 @@ pub struct KiroCliAccount {
     pub expires_at: Option<String>,
     pub scopes: Option<Vec<String>>,
     pub auth_method: String, // "social" 或 "IdC"
-    pub token_key: String, // 记录来源键名
+    pub token_key: String,   // 记录来源键名
     pub client_id: Option<String>,
     pub client_secret: Option<String>,
 }
@@ -33,11 +33,8 @@ pub fn read_kiro_cli_accounts(db_path: &str) -> Result<Vec<KiroCliAccount>, Stri
     }
 
     // 打开数据库（只读模式）
-    let conn = Connection::open_with_flags(
-        db_path,
-        rusqlite::OpenFlags::SQLITE_OPEN_READ_ONLY,
-    )
-    .map_err(|e| format!("无法打开数据库: {e}"))?;
+    let conn = Connection::open_with_flags(db_path, rusqlite::OpenFlags::SQLITE_OPEN_READ_ONLY)
+        .map_err(|e| format!("无法打开数据库: {e}"))?;
 
     let mut accounts = Vec::new();
 
@@ -75,8 +72,8 @@ fn read_token_from_db(conn: &Connection, key: &str) -> SqliteResult<KiroCliAccou
     let value: String = stmt.query_row([key], |row| row.get(0))?;
 
     // 解析 JSON
-    let token_data: serde_json::Value = serde_json::from_str(&value)
-        .map_err(|_| rusqlite::Error::InvalidQuery)?;
+    let token_data: serde_json::Value =
+        serde_json::from_str(&value).map_err(|_| rusqlite::Error::InvalidQuery)?;
 
     // 提取字段
     let access_token = token_data["access_token"]
@@ -102,13 +99,11 @@ fn read_token_from_db(conn: &Connection, key: &str) -> SqliteResult<KiroCliAccou
         .as_str()
         .map(std::string::ToString::to_string);
 
-    let scopes = token_data["scopes"]
-        .as_array()
-        .map(|arr| {
-            arr.iter()
-                .filter_map(|v| v.as_str().map(std::string::ToString::to_string))
-                .collect()
-        });
+    let scopes = token_data["scopes"].as_array().map(|arr| {
+        arr.iter()
+            .filter_map(|v| v.as_str().map(std::string::ToString::to_string))
+            .collect()
+    });
 
     // 判断认证类型
     let auth_method = if profile_arn.is_some() {
@@ -151,13 +146,16 @@ fn read_device_registration(conn: &Connection) -> SqliteResult<DeviceRegistratio
 }
 
 /// 从数据库读取指定键的 Device Registration
-fn read_device_registration_by_key(conn: &Connection, key: &str) -> SqliteResult<DeviceRegistration> {
+fn read_device_registration_by_key(
+    conn: &Connection,
+    key: &str,
+) -> SqliteResult<DeviceRegistration> {
     let mut stmt = conn.prepare("SELECT value FROM auth_kv WHERE key = ?1")?;
     let value: String = stmt.query_row([key], |row| row.get(0))?;
 
     // 解析 JSON
-    let data: serde_json::Value = serde_json::from_str(&value)
-        .map_err(|_| rusqlite::Error::InvalidQuery)?;
+    let data: serde_json::Value =
+        serde_json::from_str(&value).map_err(|_| rusqlite::Error::InvalidQuery)?;
 
     let client_id = data["client_id"]
         .as_str()
@@ -169,10 +167,7 @@ fn read_device_registration_by_key(conn: &Connection, key: &str) -> SqliteResult
         .ok_or(rusqlite::Error::InvalidQuery)?
         .to_string();
 
-    let region = data["region"]
-        .as_str()
-        .unwrap_or("us-east-1")
-        .to_string();
+    let region = data["region"].as_str().unwrap_or("us-east-1").to_string();
 
     Ok(DeviceRegistration {
         client_id,

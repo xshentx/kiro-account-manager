@@ -4,11 +4,14 @@ import { readFile } from 'node:fs/promises'
 const autoSwitchSource = await readFile(new URL('./auto_switch.rs', import.meta.url), 'utf8')
 const accountSource = await readFile(new URL('./account.rs', import.meta.url), 'utf8')
 
+assert.match(autoSwitchSource, /"capped"\s*\|\s*"封顶"/)
 assert.match(autoSwitchSource, /"banned"\s*\|\s*"封禁"\s*\|\s*"已封禁"\s*\|\s*"invalid"\s*\|\s*"失效"\s*\|\s*"已失效"\s*\|\s*"Token已失效"\s*\|\s*"expired"\s*\|\s*"过期"\s*\|\s*"已过期"/)
 assert.match(autoSwitchSource, /get\("usageBreakdownList"\)/)
 assert.match(autoSwitchSource, /get\("currentUsage"\)/)
 assert.match(autoSwitchSource, /get\("usageLimit"\)/)
+assert.match(autoSwitchSource, /overageStatus/)
 
+assert.match(accountSource, /"capped"\s*\|\s*"封顶"/)
 assert.match(accountSource, /"banned"\s*\|\s*"封禁"\s*\|\s*"已封禁"\s*\|\s*"invalid"\s*\|\s*"失效"\s*\|\s*"已失效"\s*\|\s*"Token已失效"\s*\|\s*"expired"\s*\|\s*"过期"\s*\|\s*"已过期"/)
 
 console.log('auto_switch status and usage contract looks correct')

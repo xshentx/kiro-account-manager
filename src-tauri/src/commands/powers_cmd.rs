@@ -1,41 +1,38 @@
 // Powers 管理命令
 
+use crate::commands::common::run_blocking_task;
 use crate::powers::{PowerInfo, PowersManager, RecommendedPower, RegistryInfo};
 use tauri::command;
 
 #[command]
-pub async fn install_power(name: String, clone_url: String, path_in_repo: String, branch: String) -> Result<(), String> {
-    tokio::task::spawn_blocking(move || PowersManager::install(&name, &clone_url, &path_in_repo, &branch))
+pub async fn install_power(
+    name: String,
+    clone_url: String,
+    path_in_repo: String,
+    branch: String,
+) -> Result<(), String> {
+    run_blocking_task(move || PowersManager::install(&name, &clone_url, &path_in_repo, &branch))
         .await
-        .map_err(|e| e.to_string())?
 }
 
 #[command]
 pub async fn get_powers() -> Result<Vec<PowerInfo>, String> {
-    tokio::task::spawn_blocking(PowersManager::load_all)
-        .await
-        .map_err(|e| e.to_string())?
+    run_blocking_task(PowersManager::load_all).await
 }
 
 #[command]
 pub async fn get_power(name: String) -> Result<PowerInfo, String> {
-    tokio::task::spawn_blocking(move || PowersManager::load(&name))
-        .await
-        .map_err(|e| e.to_string())?
+    run_blocking_task(move || PowersManager::load(&name)).await
 }
 
 #[command]
 pub async fn uninstall_power(name: String) -> Result<(), String> {
-    tokio::task::spawn_blocking(move || PowersManager::uninstall(&name))
-        .await
-        .map_err(|e| e.to_string())?
+    run_blocking_task(move || PowersManager::uninstall(&name)).await
 }
 
 #[command]
 pub async fn get_power_registries() -> Result<Vec<RegistryInfo>, String> {
-    tokio::task::spawn_blocking(PowersManager::list_registries)
-        .await
-        .map_err(|e| e.to_string())?
+    run_blocking_task(PowersManager::list_registries).await
 }
 
 #[command]

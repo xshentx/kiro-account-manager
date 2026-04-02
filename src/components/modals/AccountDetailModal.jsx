@@ -74,16 +74,17 @@ QuotaCard.displayName = 'QuotaCard'
 function AccountDetailModal({ account, onClose }) {
   const { t, colors } = useApp()
   const { showError } = useDialog()
-  const initQuota = account.usageData?.usageBreakdownList?.[0]?.usageLimit ?? account.quota ?? 0
-  const initUsed = account.usageData?.usageBreakdownList?.[0]?.currentUsage ?? account.used ?? 0
+  const [currentAccount, setCurrentAccount] = useState(account)
+  const initQuota = currentAccount.usageData?.usageBreakdownList?.[0]?.usageLimit ?? currentAccount.quota ?? 0
+  const initUsed = currentAccount.usageData?.usageBreakdownList?.[0]?.currentUsage ?? currentAccount.used ?? 0
   const [form, setForm] = useState({
-    email: account.email || getAccountDisplayName(account),
-    label: account.label || '',
+    email: currentAccount.email || getAccountDisplayName(currentAccount),
+    label: currentAccount.label || '',
     quota: initQuota,
     used: initUsed,
-    status: account.status,
-    accessToken: account.accessToken || '',
-    refreshToken: account.refreshToken || '',
+    status: currentAccount.status,
+    accessToken: currentAccount.accessToken || '',
+    refreshToken: currentAccount.refreshToken || '',
   })
 
   const [refreshing, setRefreshing] = useState(false)
@@ -99,11 +100,25 @@ function AccountDetailModal({ account, onClose }) {
     }
   }, [])
 
+  useEffect(() => {
+    setCurrentAccount(account)
+    setForm({
+      email: account.email || getAccountDisplayName(account),
+      label: account.label || '',
+      quota: account.usageData?.usageBreakdownList?.[0]?.usageLimit ?? account.quota ?? 0,
+      used: account.usageData?.usageBreakdownList?.[0]?.currentUsage ?? account.used ?? 0,
+      status: account.status,
+      accessToken: account.accessToken || '',
+      refreshToken: account.refreshToken || '',
+    })
+  }, [account])
+
   const handleRefresh = async () => {
     setRefreshing(true)
     try {
       const result = await invoke('sync_account', { id: account.id })
       const updated = result.account
+      setCurrentAccount(updated)
       
       // 如果有警告，显示提示
       if (result.warning) {
@@ -111,7 +126,7 @@ function AccountDetailModal({ account, onClose }) {
       }
       
       // 封禁账号额度为 0
-      const isBanned = isBannedStatus(updated.status)
+      const isBanned = isBannedStatus(updated)
       const quota = isBanned ? 0 : (updated.usageData?.usageBreakdownList?.[0]?.usageLimit ?? 0)
       const used = updated.usageData?.usageBreakdownList?.[0]?.currentUsage ?? 0
       setForm(prev => ({ ...prev, quota, used, status: updated.status }))
@@ -140,7 +155,7 @@ function AccountDetailModal({ account, onClose }) {
   }
 
   // 从 usageData 读取免费试用和奖励信息
-  const breakdown = account.usageData?.usageBreakdownList?.[0]
+  const breakdown = currentAccount.usageData?.usageBreakdownList?.[0]
   const freeTrialInfo = breakdown?.freeTrialInfo
   const bonuses = breakdown?.bonuses || []
   const now = Date.now()
@@ -164,7 +179,7 @@ function AccountDetailModal({ account, onClose }) {
   const totalQuota = form.quota + freeTrialQuota + bonusQuota
   const totalUsed = form.used + freeTrialUsed + bonusUsed
   const totalPercent = totalQuota > 0 ? Math.min(100, (totalUsed / totalQuota) * 100) : 0
-  const statusMeta = getAccountStatusMeta(form.status, t)
+  const statusMeta = getAccountStatusMeta({ status: form.status, usageData: currentAccount.usageData }, t)
 
   return (
     <DialogRoot open={true} onOpenChange={(open) => !open && onClose()}>
@@ -178,9 +193,9 @@ function AccountDetailModal({ account, onClose }) {
             {/* 头像图标 */}
             <div className={`
               w-12 h-12 rounded-lg flex items-center justify-center flex-shrink-0 shadow-md
-              ${account.provider === 'Google' 
+              ${currentAccount.provider === 'Google'
                 ? 'bg-gradient-to-br from-red-500 to-orange-500' 
-                : isGitHubProvider(account.provider) 
+                : isGitHubProvider(currentAccount.provider)
                   ? 'bg-gradient-to-br from-gray-700 to-gray-900' 
                   : 'bg-gradient-to-br from-blue-500 to-indigo-600'
               }`}
@@ -192,47 +207,47 @@ function AccountDetailModal({ account, onClose }) {
             <div className="flex-1 min-w-0">
               <div className="flex items-center gap-2 mb-1">
                 <h2 className={`text-base font-semibold ${colors.text} truncate`}>
-                  {account.email ? account.email : getAccountDisplayName(account)}
+                  {currentAccount.email ? currentAccount.email : getAccountDisplayName(currentAccount)}
                 </h2>
                 <span className={`px-2 py-0.5 rounded-md text-xs font-medium whitespace-nowrap shadow-sm ${
-                  (account.usageData?.subscriptionInfo?.subscriptionTitle?.toUpperCase()?.includes('ENTERPRISE'))
+                  (currentAccount.usageData?.subscriptionInfo?.subscriptionTitle?.toUpperCase()?.includes('ENTERPRISE'))
                     ? 'bg-gradient-to-r from-amber-500 to-orange-500 text-white shadow-amber-500/30'
-                    : (account.usageData?.subscriptionInfo?.type?.includes('PRO+') || account.usageData?.subscriptionInfo?.subscriptionTitle?.includes('PRO+'))
+                    : (currentAccount.usageData?.subscriptionInfo?.type?.includes('PRO+') || currentAccount.usageData?.subscriptionInfo?.subscriptionTitle?.includes('PRO+'))
                       ? 'bg-gradient-to-r from-purple-500 to-pink-500 text-white shadow-purple-500/30'
-                      : (account.usageData?.subscriptionInfo?.type?.includes('PRO') || account.usageData?.subscriptionInfo?.subscriptionTitle?.includes('PRO'))
+                      : (currentAccount.usageData?.subscriptionInfo?.type?.includes('PRO') || currentAccount.usageData?.subscriptionInfo?.subscriptionTitle?.includes('PRO'))
                         ? 'bg-gradient-to-r from-blue-500 to-indigo-500 text-white shadow-blue-500/30'
-                        : (account.usageData?.subscriptionInfo?.subscriptionTitle?.toUpperCase()?.includes('KIRO'))
+                        : (currentAccount.usageData?.subscriptionInfo?.subscriptionTitle?.toUpperCase()?.includes('KIRO'))
                           ? 'bg-gradient-to-r from-teal-500 to-cyan-500 text-white shadow-teal-500/30'
                           : `${colors.cardSecondary} ${colors.textMuted}`
                 }`}>
-                  {account.usageData?.subscriptionInfo?.subscriptionTitle || 'Free'}
+                  {currentAccount.usageData?.subscriptionInfo?.subscriptionTitle || 'Free'}
                 </span>
               </div>
               
               <div className={`flex items-center gap-2 text-xs ${colors.textMuted} mb-2`}>
                 <span className={`flex items-center gap-1 font-medium ${
-                  account.provider === 'Google' ? 'text-red-500'
-                    : isGitHubProvider(account.provider) ? colors.text
-                    : account.provider === 'BuilderId' ? 'text-orange-500'
+                  currentAccount.provider === 'Google' ? 'text-red-500'
+                    : isGitHubProvider(currentAccount.provider) ? colors.text
+                    : currentAccount.provider === 'BuilderId' ? 'text-orange-500'
                     : colors.textMuted
                 }`}>
                   <div className="w-1 h-1 rounded-full bg-current"></div>
-                  {getProviderDisplayName(account.provider) || t('common.unknown')}
+                  {getProviderDisplayName(currentAccount.provider) || t('common.unknown')}
                 </span>
                 <span>·</span>
-                <span>{t('detail.addedAt')} {account.addedAt?.split(' ')[0]}</span>
+                <span>{t('detail.addedAt')} {currentAccount.addedAt?.split(' ')[0]}</span>
               </div>
               
               {/* 机器码 */}
-              {account.machineId && (
+              {currentAccount.machineId && (
                 <div className={`inline-flex items-center gap-1.5 px-2 py-0.5 rounded-md ${colors.cardSecondary}`}>
                   <span className={`text-[10px] font-medium ${colors.textMuted}`}>Machine ID:</span>
                   <code className="text-[10px] font-mono text-red-400">
-                    {account.machineId}
+                    {currentAccount.machineId}
                   </code>
                   <button 
-                    type="button" 
-                    onClick={() => handleCopy(account.machineId, 'machineId')} 
+                    type="button"
+                    onClick={() => handleCopy(currentAccount.machineId, 'machineId')}
                     className={`p-0.5 rounded ${colors.cardHover} cursor-pointer transition-colors duration-200 focus:outline-none focus:ring-2 focus:ring-blue-500/30`}
                   >
                     {copied === 'machineId' ? <Check size={10} className="text-green-500" /> : <Copy size={10} className={colors.textMuted} />}
@@ -302,7 +317,7 @@ function AccountDetailModal({ account, onClose }) {
                 used={form.used}
                 quota={form.quota}
                 icon="🔄"
-                expiry={account.usageData?.nextDateReset ? `${new Date(account.usageData.nextDateReset * 1000).toLocaleDateString()} ${t('detail.reset')}` : null}
+                expiry={currentAccount.usageData?.nextDateReset ? `${new Date(currentAccount.usageData.nextDateReset * 1000).toLocaleDateString()} ${t('detail.reset')}` : null}
                 colors={colors}
                 t={t}
               />
@@ -386,26 +401,26 @@ function AccountDetailModal({ account, onClose }) {
               <div className="grid grid-cols-2 gap-3">
                 <div className={`p-3 rounded-lg ${colors.cardSecondary}`}>
                   <div className={`text-xs ${colors.textMuted} mb-1`}>{t('detail.userId')}</div>
-                  <div className={`${colors.text} font-mono text-xs truncate`} title={account.usageData?.userInfo?.userId}>
-                    {account.usageData?.userInfo?.userId?.slice(-12) || '-'}
+                  <div className={`${colors.text} font-mono text-xs truncate`} title={currentAccount.usageData?.userInfo?.userId}>
+                    {currentAccount.usageData?.userInfo?.userId?.slice(-12) || '-'}
                   </div>
                 </div>
                 <div className={`p-3 rounded-lg ${colors.cardSecondary}`}>
                   <div className={`text-xs ${colors.textMuted} mb-1`}>{t('detail.email')}</div>
                   <div className={`${colors.text} text-xs truncate`}>
-                    {account.usageData?.userInfo?.email || account.email || getAccountDisplayName(account)}
+                    {currentAccount.usageData?.userInfo?.email || currentAccount.email || getAccountDisplayName(currentAccount)}
                   </div>
                 </div>
                 <div className={`p-3 rounded-lg ${colors.cardSecondary}`}>
                   <div className={`text-xs ${colors.textMuted} mb-1`}>{t('detail.subscriptionType')}</div>
-                  <div className={`${colors.text} font-mono text-xs truncate`} title={account.usageData?.subscriptionInfo?.type}>
-                    {account.usageData?.subscriptionInfo?.type || '-'}
+                  <div className={`${colors.text} font-mono text-xs truncate`} title={currentAccount.usageData?.subscriptionInfo?.type}>
+                    {currentAccount.usageData?.subscriptionInfo?.type || '-'}
                   </div>
                 </div>
                 <div className={`p-3 rounded-lg ${colors.cardSecondary}`}>
                   <div className={`text-xs ${colors.textMuted} mb-1`}>{t('detail.upgradeable')}</div>
                   <div className={colors.text}>
-                    {account.usageData?.subscriptionInfo?.upgradeCapability === 'UPGRADE_CAPABLE' ? (
+                    {currentAccount.usageData?.subscriptionInfo?.upgradeCapability === 'UPGRADE_CAPABLE' ? (
                       <span className="text-green-500 font-medium">✓ {t('common.yes')}</span>
                     ) : (
                       <span className={colors.textMuted}>✗ {t('common.no')}</span>

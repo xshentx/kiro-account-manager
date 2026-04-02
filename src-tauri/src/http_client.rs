@@ -222,6 +222,38 @@ pub fn should_send_codewhisperer_optout() -> bool {
     !content_collection_enabled
 }
 
+pub fn is_external_idp_auth_method(auth_method: Option<&str>) -> bool {
+    auth_method.is_some_and(|value| value.trim().eq_ignore_ascii_case("external_idp"))
+}
+
+pub fn should_add_redirect_for_internal(provider: Option<&str>) -> bool {
+    provider.is_some_and(|value| value.trim().eq_ignore_ascii_case("Internal"))
+}
+
+pub fn apply_kiro_runtime_headers(
+    builder: reqwest::RequestBuilder,
+    access_token: &str,
+    user_agent: &str,
+    accept: &str,
+    auth_method: Option<&str>,
+    provider: Option<&str>,
+) -> reqwest::RequestBuilder {
+    let mut builder = builder
+        .header(reqwest::header::AUTHORIZATION, format!("Bearer {access_token}"))
+        .header(reqwest::header::ACCEPT, accept)
+        .header(reqwest::header::USER_AGENT, user_agent)
+        .header("x-amz-user-agent", user_agent);
+
+    if is_external_idp_auth_method(auth_method) {
+        builder = builder.header("TokenType", "EXTERNAL_IDP");
+    }
+    if should_add_redirect_for_internal(provider) {
+        builder = builder.header("redirect-for-internal", "true");
+    }
+
+    builder
+}
+
 /// 获取 Kiro IDE 设置中的代理
 fn get_proxy_from_kiro_settings() -> Option<String> {
     read_kiro_settings_json().and_then(|json| {
@@ -277,8 +309,9 @@ pub fn build_http_client_with_user_agent(user_agent: &str) -> Result<Client, Str
 #[cfg(test)]
 mod tests {
     use super::{
-        is_supported_kiro_region, parse_region_from_profile_arn, resolve_kiro_upstream_region,
-        resolve_q_service_endpoint,
+        apply_kiro_runtime_headers, is_external_idp_auth_method, is_supported_kiro_region,
+        parse_region_from_profile_arn, resolve_kiro_upstream_region, resolve_q_service_endpoint,
+        should_add_redirect_for_internal,
     };
 
     #[test]
@@ -347,5 +380,81 @@ mod tests {
         assert!(is_supported_kiro_region("us-east-1"));
         assert!(is_supported_kiro_region("us-gov-west-1"));
         assert!(!is_supported_kiro_region("eu-west-1"));
+    }
+
+    #[test]
+    fn external_idp_auth_method_check_is_case_insensitive_and_strict() {
+        assert!(is_external_idp_auth_method(Some("external_idp")));
+        assert!(is_external_idp_auth_method(Some("EXTERNAL_IDP")));
+        assert!(!is_external_idp_auth_method(Some("IdC")));
+        assert!(!is_external_idp_auth_method(Some("social")));
+    }
+
+    #[test]
+    fn redirect_for_internal_check_is_case_insensitive_and_strict() {
+        assert!(should_add_redirect_for_internal(Some("Internal")));
+        assert!(should_add_redirect_for_internal(Some("internal")));
+        assert!(!should_add_redirect_for_internal(Some("Enterprise")));
+        assert!(!should_add_redirect_for_internal(Some("BuilderId")));
+    }
+
+    #[test]
+    fn apply_kiro_runtime_headers_only_adds_runtime_bucket_headers() {
+        let request = apply_kiro_runtime_headers(
+            reqwest::Client::new().get("https://q.us-east-1.amazonaws.com/ListAvailableModels"),
+            "token-1",
+            "KiroIDE 0.11.34 machine-123",
+            "application/json",
+            Some("external_idp"),
+            Some("Internal"),
+        )
+        .build()
+        .expect("request should build");
+
+        assert_eq!(
+            request
+                .headers()
+                .get(reqwest::header::AUTHORIZATION)
+                .and_then(|value| value.to_str().ok()),
+            Some("Bearer token-1")
+        );
+        assert_eq!(
+            request
+                .headers()
+                .get(reqwest::header::USER_AGENT)
+                .and_then(|value| value.to_str().ok()),
+            Some("KiroIDE 0.11.34 machine-123")
+        );
+        assert_eq!(
+            request
+                .headers()
+                .get("x-amz-user-agent")
+                .and_then(|value| value.to_str().ok()),
+            Some("KiroIDE 0.11.34 machine-123")
+        );
+        assert_eq!(
+            request
+                .headers()
+                .get(reqwest::header::ACCEPT)
+                .and_then(|value| value.to_str().ok()),
+            Some("application/json")
+        );
+        assert_eq!(
+            request
+                .headers()
+                .get("TokenType")
+                .and_then(|value| value.to_str().ok()),
+            Some("EXTERNAL_IDP")
+        );
+        assert_eq!(
+            request
+                .headers()
+                .get("redirect-for-internal")
+                .and_then(|value| value.to_str().ok()),
+            Some("true")
+        );
+        assert!(request.headers().get("x-amzn-codewhisperer-optout").is_none());
+        assert!(request.headers().get("x-amzn-kiro-agent-mode").is_none());
+        assert!(request.headers().get("x-amzn-kiro-profile-arn").is_none());
     }
 }

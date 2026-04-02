@@ -37,9 +37,9 @@ const ListRow = memo(function ListRow({
   const limit = getQuota(account)
   const remaining = Math.max(limit - used, 0)
   const usagePercent = limit > 0 ? Math.min((used / limit) * 100, 100) : 0
-  const isBanned = isBannedStatus(account.status)
-  const isUnavailable = isUnavailableStatus(account.status)
-  const statusMeta = getAccountStatusMeta(account.status, t)
+  const isBanned = isBannedStatus(account)
+  const isUnavailable = isUnavailableStatus(account)
+  const statusMeta = getAccountStatusMeta(account, t)
 
 
   const handleContextMenu = useCallback((e) => {

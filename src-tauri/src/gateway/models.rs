@@ -21,6 +21,8 @@ pub struct NormalizedMessage {
     pub content: Option<serde_json::Value>,
     pub tool_calls: Option<Vec<ToolCall>>,
     pub tool_call_id: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub metadata: Option<serde_json::Value>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -219,6 +221,18 @@ pub struct HistoryAssistantMessage {
     pub content: String,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub tool_uses: Option<Vec<KiroToolUse>>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub reasoning_content: Option<serde_json::Value>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub references: Option<serde_json::Value>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub supplementary_web_links: Option<serde_json::Value>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub followup_prompt: Option<serde_json::Value>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub message_id: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub cache_point: Option<serde_json::Value>,
 }
 
 #[derive(Debug, Clone, Serialize)]

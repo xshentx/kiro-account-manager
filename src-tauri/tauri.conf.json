@@ -10,7 +10,7 @@
     "frontendDist": "../dist"
   },
   "app": {
-    "withGlobalTauri": true,
+    "withGlobalTauri": false,
     "trayIcon": {
       "iconPath": "icons/icon.png",
       "iconAsTemplate": false
@@ -32,7 +32,19 @@
       }
     ],
     "security": {
-      "csp": null
+      "csp": {
+        "default-src": ["'self'"],
+        "base-uri": ["'self'"],
+        "form-action": ["'self'"],
+        "frame-ancestors": ["'none'"],
+        "object-src": ["'none'"],
+        "script-src": ["'self'"],
+        "style-src": ["'self'", "'unsafe-inline'"],
+        "img-src": ["'self'", "asset:", "http://asset.localhost", "https:", "data:"],
+        "font-src": ["'self'", "data:"],
+        "connect-src": ["'self'", "ipc:", "http://ipc.localhost", "https://kiro-website-six.vercel.app"]
+      },
+      "devCsp": null
     }
   },
   "plugins": {
@@ -65,8 +77,14 @@
     ],
     "targets": ["msi", "app", "dmg", "deb", "rpm", "appimage"],
     "windows": {
+      "allowDowngrades": false,
+      "webviewInstallMode": {
+        "type": "embedBootstrapper",
+        "silent": true
+      },
       "wix": {
-        "language": "zh-CN"
+        "language": "zh-CN",
+        "template": "wix/main.wxs"
       }
     },
     "macOS": {

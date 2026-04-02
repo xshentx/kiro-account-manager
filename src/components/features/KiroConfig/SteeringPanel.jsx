@@ -2,7 +2,7 @@ import { useState, useEffect, useCallback } from 'react'
 import { invoke } from '@tauri-apps/api/core'
 import { useApp } from '../../../hooks/useApp'
 import { useDialog } from '../../../contexts/DialogContext'
-import { FileText, RefreshCw, Trash2, Save, Plus, X, Globe, FolderOpen } from 'lucide-react'
+import { FileText, RefreshCw, Trash2, Save, Plus, X, Globe, FolderOpen, Wand2, Sparkles } from 'lucide-react'
 import { TextInput, Select, Textarea } from '@mantine/core'
 import {
   getThemeAccent,
@@ -56,7 +56,7 @@ const ScopeBadge = ({ scope, accent }) => {
 
 function SteeringPanel({ onCountChange, projectDir }) {
   const { t, theme, colors } = useApp()
-  const { showConfirm } = useDialog()
+  const { showConfirm, showSuccess } = useDialog()
   const surface = getThemeSurfaceStyles(theme)
   const accent = getThemeAccent(theme)
 
@@ -67,6 +67,9 @@ function SteeringPanel({ onCountChange, projectDir }) {
   const [saving, setSaving] = useState(false)
   const [hasChanges, setHasChanges] = useState(false)
   const [showCreateModal, setShowCreateModal] = useState(false)
+  const [refining, setRefining] = useState(false)
+  const [creatingDefault, setCreatingDefault] = useState(false)
+  const [initializingProject, setInitializingProject] = useState(false)
 
   const loadFiles = useCallback(async () => {
     setLoading(true)
@@ -167,6 +170,92 @@ function SteeringPanel({ onCountChange, projectDir }) {
     }
   }
 
+  const resolveScope = async () => {
+    if (!projectDir) return 'user'
+    const useProjectScope = await showConfirm(
+      t('steering.scopeTitle'),
+      t('steering.scopeMessage'),
+      {
+        confirmText: t('kiroConfig.scopeProject'),
+        cancelText: t('kiroConfig.scopeUser'),
+      }
+    )
+    return useProjectScope ? 'project' : 'user'
+  }
+
+  const upsertFile = (nextFile) => {
+    const nextFiles = [
+      ...files.filter(file => !(file.fileName === nextFile.fileName && file.scope === nextFile.scope)),
+      nextFile
+    ]
+    setFiles(nextFiles)
+    onCountChange?.(nextFiles.length)
+    handleSelect(nextFile)
+  }
+
+  const handleCreateDefault = async () => {
+    setCreatingDefault(true)
+    try {
+      const scope = await resolveScope()
+      const created = await invoke('create_default_steering_file', {
+        scope,
+        projectDir: projectDir || null,
+      })
+      upsertFile(created)
+      showSuccess(t('steering.defaultCreated'), created.fileName)
+    } catch (e) {
+      handleUiError('创建默认 Steering 模板失败', e, { userMessage: t('steering.createDefaultFailed') || '创建失败' })
+    } finally {
+      setCreatingDefault(false)
+    }
+  }
+
+  const handleCreateInitial = async () => {
+    if (!projectDir) return
+    setInitializingProject(true)
+    try {
+      const created = await invoke('create_initial_project_steering', { projectDir })
+      const createdFiles = Array.isArray(created) ? created : []
+      if (createdFiles.length > 0) {
+        const merged = [...files]
+        for (const file of createdFiles) {
+          const index = merged.findIndex(item => item.fileName === file.fileName && item.scope === file.scope)
+          if (index >= 0) {
+            merged[index] = file
+          } else {
+            merged.push(file)
+          }
+        }
+        setFiles(merged)
+        onCountChange?.(merged.length)
+        handleSelect(createdFiles[0])
+      }
+      showSuccess(t('steering.initialCreated'), projectDir)
+    } catch (e) {
+      handleUiError('初始化项目 Steering 失败', e, { userMessage: t('steering.initializeFailed') || '初始化失败' })
+    } finally {
+      setInitializingProject(false)
+    }
+  }
+
+  const handleRefine = async () => {
+    if (!selectedFile) return
+    setRefining(true)
+    try {
+      const refined = await invoke('refine_steering_file', {
+        fileName: selectedFile.fileName,
+        scope: selectedFile.scope,
+        projectDir: projectDir || null,
+      })
+      upsertFile(refined)
+      showSuccess(t('steering.refineSuccess'), refined.fileName)
+    } catch (e) {
+      handleUiError('整理 Steering 文件失败', e, { userMessage: t('steering.refineFailed') || '整理失败' })
+    } finally {
+      setRefining(false)
+    }
+  }
+
   const inclusionOptions = [
     { value: 'always', label: t('steering.inclusionAlways'), desc: t('steering.inclusionAlwaysDesc') },
     { value: 'auto', label: t('steering.inclusionAuto'), desc: t('steering.inclusionAutoDesc') },
@@ -192,6 +281,11 @@ function SteeringPanel({ onCountChange, projectDir }) {
         onDelete={handleDelete}
         onRefresh={loadFiles}
         onCreate={() => setShowCreateModal(true)}
+        onCreateDefault={handleCreateDefault}
+        onCreateInitial={handleCreateInitial}
+        creatingDefault={creatingDefault}
+        initializingProject={initializingProject}
+        hasProjectDir={!!projectDir}
         accent={accent}
         colors={colors}
         t={t}
@@ -212,6 +306,8 @@ function SteeringPanel({ onCountChange, projectDir }) {
             onNameChange={(v) => updateEditState('name', v)}
             onDescriptionChange={(v) => updateEditState('description', v)}
             onSave={handleSave}
+            onRefine={handleRefine}
+            refining={refining}
             surface={surface}
             accent={accent}
             colors={colors}
@@ -263,7 +359,7 @@ const InclusionBadge = ({ inclusion, accent }) => {
 }
 
 // 文件列表组件
-function FileList({ files, selectedFile, onSelect, onDelete, onRefresh, onCreate, accent, colors, t }) {
+function FileList({ files, selectedFile, onSelect, onDelete, onRefresh, onCreate, onCreateDefault, onCreateInitial, creatingDefault, initializingProject, hasProjectDir, accent, colors, t }) {
   const accentSolidButtonClass = getSolidAccentButton(accent)
   const inclusionStyles = getInclusionStyles(accent)
   // 按 inclusion 分组（保持顺序）
@@ -287,6 +383,24 @@ function FileList({ files, selectedFile, onSelect, onDelete, onRefresh, onCreate
           <span className={`text-xs ${colors.textMuted}`}>({files.length})</span>
         </div>
         <div className="flex gap-2">
+          <button
+            onClick={onCreateDefault}
+            disabled={creatingDefault}
+            className={`p-2 rounded-lg ${colors.cardHover} transition-colors disabled:opacity-50`}
+            title={t('steering.defaultTemplate')}
+          >
+            <Wand2 size={16} className={accent.text} />
+          </button>
+          {hasProjectDir && (
+            <button
+              onClick={onCreateInitial}
+              disabled={initializingProject}
+              className={`p-2 rounded-lg ${colors.cardHover} transition-colors disabled:opacity-50`}
+              title={t('steering.initializeProject')}
+            >
+              <Sparkles size={16} className={accent.text} />
+            </button>
+          )}
           <button
             onClick={onCreate}
             className={`p-2 rounded-lg ${colors.cardHover} transition-colors`}
@@ -391,7 +505,7 @@ function FileList({ files, selectedFile, onSelect, onDelete, onRefresh, onCreate
 }
 
 // 编辑器组件
-function Editor({ file, editState, hasChanges, saving, inclusionOptions, onContentChange, onInclusionChange, onFilePatternChange, onNameChange, onDescriptionChange, onSave, surface, accent, colors, t }) {
+function Editor({ file, editState, hasChanges, saving, refining, inclusionOptions, onContentChange, onInclusionChange, onFilePatternChange, onNameChange, onDescriptionChange, onSave, onRefine, surface, accent, colors, t }) {
   const accentSolidButtonClass = getSolidAccentButton(accent)
   return (
     <>
@@ -401,16 +515,26 @@ function Editor({ file, editState, hasChanges, saving, inclusionOptions, onConte
           <ScopeBadge scope={file.scope} accent={accent} />
           {hasChanges && <span className="text-xs text-orange-500">● {t('steering.save')}</span>}
         </div>
-        <button
-          onClick={onSave}
-          disabled={!hasChanges || saving}
-          className={`cursor-pointer flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-sm font-medium transition-all duration-200 focus:outline-none focus:ring-2 ${accent.ring} ${
-            hasChanges ? accentSolidButtonClass : colors.btnDisabled
-          } disabled:opacity-50`}
-        >
-          <Save size={14} />
-          {saving ? t('steering.saving') : t('steering.save')}
-        </button>
+        <div className="flex items-center gap-2">
+          <button
+            onClick={onRefine}
+            disabled={refining}
+            className={`cursor-pointer flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-sm font-medium transition-all duration-200 focus:outline-none focus:ring-2 ${accent.ring} ${colors.cardSecondary} disabled:opacity-50`}
+          >
+            <Wand2 size={14} />
+            {refining ? t('steering.refining') : t('steering.refine')}
+          </button>
+          <button
+            onClick={onSave}
+            disabled={!hasChanges || saving}
+            className={`cursor-pointer flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-sm font-medium transition-all duration-200 focus:outline-none focus:ring-2 ${accent.ring} ${
+              hasChanges ? accentSolidButtonClass : colors.btnDisabled
+            } disabled:opacity-50`}
+          >
+            <Save size={14} />
+            {saving ? t('steering.saving') : t('steering.save')}
+          </button>
+        </div>
       </div>
       {/* frontmatter 编辑区 */}
       <div className={`px-4 py-3 border-b ${colors.cardBorder} space-y-2`}>

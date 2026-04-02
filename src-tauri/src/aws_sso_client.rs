@@ -64,10 +64,7 @@ impl AWSSSOClient {
         let base_url = format!("https://oidc.{region}.amazonaws.com");
         let client = build_http_client().expect("Failed to create HTTP client");
 
-        Self {
-            base_url,
-            client,
-        }
+        Self { base_url, client }
     }
 
     /// 获取 authorize URL
@@ -83,11 +80,12 @@ impl AWSSSOClient {
         has_user_provided_input: bool,
     ) -> Result<ClientRegistration, String> {
         let url = format!("{}/client/register", self.base_url);
-        
-        let scopes: Vec<String> = GRANT_SCOPES.iter()
+
+        let scopes: Vec<String> = GRANT_SCOPES
+            .iter()
             .map(std::string::ToString::to_string)
             .collect();
-        
+
         let body = serde_json::json!({
             "clientName": "Kiro IDE",
             "clientType": "public",
@@ -134,9 +132,8 @@ impl AWSSSOClient {
 
         #[cfg(debug_assertions)]
         println!("[AWS SSO] Client registered successfully");
-        
-        serde_json::from_str(&text)
-            .map_err(|e| format!("Failed to parse client registration: {e}"))
+
+        serde_json::from_str(&text).map_err(|e| format!("Failed to parse client registration: {e}"))
     }
 
     /// 使用授权码交换 Token
@@ -162,7 +159,8 @@ impl AWSSSOClient {
         #[cfg(debug_assertions)]
         println!("[AWS SSO] Create Token with Authorization Code");
 
-        let resp = self.client
+        let resp = self
+            .client
             .post(&url)
             .header("Content-Type", "application/json")
             .json(&body)
@@ -180,8 +178,7 @@ impl AWSSSOClient {
         #[cfg(debug_assertions)]
         log::debug!("[AWS SSO] Token created successfully");
 
-        serde_json::from_str(&text)
-            .map_err(|e| format!("Failed to parse token response: {e}"))
+        serde_json::from_str(&text).map_err(|e| format!("Failed to parse token response: {e}"))
     }
 
     /// 刷新 Token
@@ -222,7 +219,10 @@ impl AWSSSOClient {
         if !status.is_success() {
             log::debug!("[AWS SSO] RefreshToken Status: {status}");
             if let Ok(json) = serde_json::from_str::<serde_json::Value>(&text) {
-                log::debug!("[AWS SSO] RefreshToken Response:\n{}", serde_json::to_string_pretty(&json).unwrap_or(text.clone()));
+                log::debug!(
+                    "[AWS SSO] RefreshToken Response:\n{}",
+                    serde_json::to_string_pretty(&json).unwrap_or(text.clone())
+                );
             } else {
                 log::debug!("[AWS SSO] RefreshToken Response: {text}");
             }
@@ -235,7 +235,9 @@ impl AWSSSOClient {
             }
             if status.as_u16() == 400 {
                 // 400 错误可能是 region 不匹配或 refresh token 无效
-                if text.to_lowercase().contains("invalid") && text.to_lowercase().contains("refresh") {
+                if text.to_lowercase().contains("invalid")
+                    && text.to_lowercase().contains("refresh")
+                {
                     return Err(format!("RefreshToken 无效或已过期。\n\n可能的原因：\n1. Region 选择错误（请确认账号注册时使用的 Region）\n2. RefreshToken 已过期\n3. ClientId 或 ClientSecret 不匹配\n\n错误详情: {text}"));
                 }
                 return Err(format!("Token refresh failed (400 Bad Request)\n\n可能的原因：\n1. Region 选择错误\n2. RefreshToken 无效\n\n错误详情: {text}"));
@@ -243,7 +245,6 @@ impl AWSSSOClient {
             return Err(format!("Token refresh failed ({status}): {text}"));
         }
 
-        serde_json::from_str(&text)
-            .map_err(|e| format!("Failed to parse token response: {e}"))
+        serde_json::from_str(&text).map_err(|e| format!("Failed to parse token response: {e}"))
     }
 }

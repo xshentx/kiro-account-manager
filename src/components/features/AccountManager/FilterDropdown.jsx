@@ -16,6 +16,7 @@ const SUBSCRIPTION_OPTIONS = [
 const STATUS_OPTIONS = [
   { value: '', label: '全部' },
   { value: 'normal', label: '正常' },
+  { value: 'capped', label: '封顶' },
   { value: 'banned', label: '封禁' },
   { value: 'invalid', label: '失效' },
   { value: 'expired', label: '过期' },

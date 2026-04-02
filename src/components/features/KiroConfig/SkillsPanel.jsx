@@ -1,8 +1,9 @@
 import { useState, useEffect, useCallback } from 'react'
 import { invoke } from '@tauri-apps/api/core'
+import { open } from '@tauri-apps/plugin-dialog'
 import { useApp } from '../../../hooks/useApp'
 import { useDialog } from '../../../contexts/DialogContext'
-import { Puzzle, RefreshCw, Trash2, Save, Plus, X, FolderOpen, Globe } from 'lucide-react'
+import { Puzzle, RefreshCw, Trash2, Save, Plus, X, FolderOpen, Globe, Download } from 'lucide-react'
 import { TextInput, Select, Textarea } from '@mantine/core'
 import {
   getThemeAccent,
@@ -53,7 +54,7 @@ const ScopeBadge = ({ scope, accent }) => {
 
 function SkillsPanel({ onCountChange, projectDir }) {
   const { t, theme, colors } = useApp()
-  const { showConfirm, showError } = useDialog()
+  const { showConfirm, showError, showSuccess } = useDialog()
   const surface = getThemeSurfaceStyles(theme)
   const accent = getThemeAccent(theme)
   const accentSolidButtonClass = getSolidAccentButton(accent)
@@ -66,6 +67,7 @@ function SkillsPanel({ onCountChange, projectDir }) {
   const [saving, setSaving] = useState(false)
   const [hasChanges, setHasChanges] = useState(false)
   const [showCreateModal, setShowCreateModal] = useState(false)
+  const [showGithubImportModal, setShowGithubImportModal] = useState(false)
 
   const loadSkills = useCallback(async () => {
     setLoading(true)
@@ -166,6 +168,72 @@ function SkillsPanel({ onCountChange, projectDir }) {
     }
   }
 
+  const resolveImportScope = async () => {
+    if (!projectDir) return 'user'
+    const useProjectScope = await showConfirm(
+      t('skills.importScopeTitle'),
+      t('skills.importScopeMessage'),
+      {
+        confirmText: t('kiroConfig.scopeProject'),
+        cancelText: t('kiroConfig.scopeUser'),
+      }
+    )
+    return useProjectScope ? 'project' : 'user'
+  }
+
+  const upsertImportedSkill = (imported) => {
+    const nextSkills = [
+      ...skills.filter(skill => !(skill.name === imported.name && skill.scope === imported.scope)),
+      imported
+    ].sort((a, b) => a.name.localeCompare(b.name))
+    setSkills(nextSkills)
+    onCountChange?.(nextSkills.length)
+    handleSelect(imported)
+  }
+
+  const handleImportLocal = async () => {
+    try {
+      const selected = await open({
+        directory: true,
+        multiple: false,
+        title: t('skills.importLocal'),
+      })
+      if (!selected) return
+
+      const scope = await resolveImportScope()
+      const imported = await invoke('import_skill_local', {
+        sourcePath: selected,
+        scope,
+        projectDir: projectDir || null,
+        overwrite: false,
+      })
+      upsertImportedSkill(imported)
+      showSuccess(t('skills.importSuccess'), `${imported.name}`)
+    } catch (e) {
+      handleUiError('导入本地 Skill 失败', e, { userMessage: t('skills.importFailed') || '导入失败' })
+    }
+  }
+
+  const handleImportGithub = async ({ repoUrl, pathInRepo, branch, targetName }) => {
+    try {
+      const scope = await resolveImportScope()
+      const imported = await invoke('import_skill_from_github', {
+        repoUrl: repoUrl.trim(),
+        pathInRepo: pathInRepo.trim() || null,
+        branch: branch.trim() || null,
+        targetName: targetName.trim() || null,
+        scope,
+        projectDir: projectDir || null,
+        overwrite: false,
+      })
+      upsertImportedSkill(imported)
+      setShowGithubImportModal(false)
+      showSuccess(t('skills.importSuccess'), `${imported.name}`)
+    } catch (e) {
+      handleUiError('从 GitHub 导入 Skill 失败', e, { userMessage: t('skills.importGithubFailed') || '导入失败' })
+    }
+  }
+
   if (loading) {
     return (
       <div className="flex items-center justify-center h-full">
@@ -185,6 +253,20 @@ function SkillsPanel({ onCountChange, projectDir }) {
             <span className={`text-xs ${colors.textMuted}`}>({skills.length})</span>
           </div>
           <div className="flex gap-2">
+            <button
+              onClick={handleImportLocal}
+              className={`cursor-pointer p-2 rounded-lg ${colors.cardHover} transition-colors duration-200 focus:outline-none focus:ring-2 ${accent.ring}`}
+              title={t('skills.importLocal')}
+            >
+              <FolderOpen size={16} className={accent.text} />
+            </button>
+            <button
+              onClick={() => setShowGithubImportModal(true)}
+              className={`cursor-pointer p-2 rounded-lg ${colors.cardHover} transition-colors duration-200 focus:outline-none focus:ring-2 ${accent.ring}`}
+              title={t('skills.importGithub')}
+            >
+              <Globe size={16} className={accent.text} />
+            </button>
             <button
               onClick={() => setShowCreateModal(true)}
               className={`cursor-pointer p-2 rounded-lg ${colors.cardHover} transition-colors duration-200 focus:outline-none focus:ring-2 ${accent.ring}`}
@@ -388,6 +470,16 @@ function SkillsPanel({ onCountChange, projectDir }) {
           hasProjectDir={!!projectDir}
         />
       )}
+      {showGithubImportModal && (
+        <ImportGithubSkillModal
+          onImport={handleImportGithub}
+          onClose={() => setShowGithubImportModal(false)}
+          accent={accent}
+          accentGradientButtonClass={accentGradientButtonClass}
+          colors={colors}
+          t={t}
+        />
+      )}
     </div>
   )
 }
@@ -477,6 +569,96 @@ function CreateSkillModal({ onCreate, onClose, accent, accentGradientButtonClass
             className={`w-full px-4 py-3 rounded-xl text-sm font-medium transition-all disabled:opacity-50 disabled:cursor-not-allowed active:scale-[0.98] ${accentGradientButtonClass}`}
           >
             {t('common.add')}
+          </button>
+        </div>
+      </div>
+    </div>
+  )
+}
+
+function ImportGithubSkillModal({ onImport, onClose, accent, accentGradientButtonClass, colors, t }) {
+  const [repoUrl, setRepoUrl] = useState('')
+  const [pathInRepo, setPathInRepo] = useState('')
+  const [branch, setBranch] = useState('main')
+  const [targetName, setTargetName] = useState('')
+
+  const canSubmit = repoUrl.trim().startsWith('https://github.com/')
+
+  return (
+    <div className="fixed inset-0 bg-black/60 backdrop-blur-sm flex items-center justify-center z-50 p-4" onClick={onClose}>
+      <div
+        className={`${colors.card} rounded-2xl w-full max-w-[460px] shadow-2xl border ${colors.cardBorder} overflow-hidden`}
+        onClick={e => e.stopPropagation()}
+        style={{ animation: 'dialogIn 0.2s ease-out' }}
+      >
+        <div className={`flex items-center justify-between px-5 py-4 ${colors.dialogHeader}`}>
+          <div className="flex items-center gap-3">
+            <div className={`w-10 h-10 rounded-xl ${colors.info} flex items-center justify-center`}>
+              <Download size={20} className={accent.text} />
+            </div>
+            <h2 className={`text-base font-semibold ${colors.text}`}>{t('skills.importGithub')}</h2>
+          </div>
+          <button onClick={onClose} className={`p-1.5 rounded-lg transition-colors ${colors.cardHover}`}>
+            <X size={18} className={colors.textMuted} />
+          </button>
+        </div>
+
+        <div className="p-5 space-y-4">
+          <div>
+            <label className={`block text-xs font-medium ${colors.textMuted} mb-1.5`}>{t('skills.githubRepoUrl')}</label>
+            <TextInput
+              placeholder="https://github.com/owner/repo"
+              value={repoUrl}
+              onChange={(e) => setRepoUrl(e.target.value)}
+              size="md"
+              classNames={{ input: `${colors.text} ${colors.input} ${colors.inputFocus}` }}
+              styles={{ input: { borderRadius: '0.5rem' } }}
+            />
+          </div>
+
+          <div>
+            <label className={`block text-xs font-medium ${colors.textMuted} mb-1.5`}>{t('skills.githubPath')}</label>
+            <TextInput
+              placeholder={t('skills.githubPathPlaceholder')}
+              value={pathInRepo}
+              onChange={(e) => setPathInRepo(e.target.value)}
+              size="md"
+              classNames={{ input: `${colors.text} ${colors.input} ${colors.inputFocus}` }}
+              styles={{ input: { borderRadius: '0.5rem' } }}
+            />
+          </div>
+
+          <div className="grid grid-cols-2 gap-3">
+            <div>
+              <label className={`block text-xs font-medium ${colors.textMuted} mb-1.5`}>{t('skills.githubBranch')}</label>
+              <TextInput
+                placeholder="main"
+                value={branch}
+                onChange={(e) => setBranch(e.target.value)}
+                size="md"
+                classNames={{ input: `${colors.text} ${colors.input} ${colors.inputFocus}` }}
+                styles={{ input: { borderRadius: '0.5rem' } }}
+              />
+            </div>
+            <div>
+              <label className={`block text-xs font-medium ${colors.textMuted} mb-1.5`}>{t('skills.importTargetName')}</label>
+              <TextInput
+                placeholder={t('skills.importTargetNamePlaceholder')}
+                value={targetName}
+                onChange={(e) => setTargetName(e.target.value)}
+                size="md"
+                classNames={{ input: `${colors.text} ${colors.input} ${colors.inputFocus}` }}
+                styles={{ input: { borderRadius: '0.5rem' } }}
+              />
+            </div>
+          </div>
+
+          <button
+            onClick={() => onImport({ repoUrl, pathInRepo, branch, targetName })}
+            disabled={!canSubmit}
+            className={`w-full px-4 py-3 rounded-xl text-sm font-medium transition-all disabled:opacity-50 disabled:cursor-not-allowed active:scale-[0.98] ${accentGradientButtonClass}`}
+          >
+            {t('skills.importGithub')}
           </button>
         </div>
       </div>

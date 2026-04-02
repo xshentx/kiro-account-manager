@@ -16,10 +16,10 @@ pub fn check_kiro_running() -> bool {
         .args(["/FI", "IMAGENAME eq Kiro.exe", "/NH"])
         .creation_flags(CREATE_NO_WINDOW)
         .output();
-    
+
     match output {
         Ok(out) => decode_cmd_output(&out.stdout).contains("Kiro.exe"),
-        Err(_) => false
+        Err(_) => false,
     }
 }
 
@@ -27,37 +27,31 @@ pub fn check_kiro_running() -> bool {
 pub fn check_kiro_running() -> bool {
     // 尝试多种方式检测 Kiro 进程
     // 1. 精确匹配 "Kiro"
-    let output = Command::new("pgrep")
-        .args(["-x", "Kiro"])
-        .output();
-    
+    let output = Command::new("pgrep").args(["-x", "Kiro"]).output();
+
     if let Ok(out) = output {
         if out.status.success() {
             return true;
         }
     }
-    
+
     // 2. 模糊匹配包含 "Kiro" 的进程
-    let output = Command::new("pgrep")
-        .args(["-f", "Kiro.app"])
-        .output();
-    
+    let output = Command::new("pgrep").args(["-f", "Kiro.app"]).output();
+
     match output {
         Ok(out) => out.status.success(),
-        Err(_) => false
+        Err(_) => false,
     }
 }
 
 #[cfg(not(any(target_os = "windows", target_os = "macos")))]
 pub fn check_kiro_running() -> bool {
     // Linux: 使用 pgrep 检测 kiro 进程
-    let output = Command::new("pgrep")
-        .args(["-f", "kiro"])
-        .output();
-    
+    let output = Command::new("pgrep").args(["-f", "kiro"]).output();
+
     match output {
         Ok(out) => out.status.success(),
-        Err(_) => false
+        Err(_) => false,
     }
 }
 
@@ -69,7 +63,7 @@ pub fn kill_kiro() -> Result<(), String> {
         .creation_flags(CREATE_NO_WINDOW)
         .output()
         .map_err(|e| format!("Failed to execute taskkill: {e}"))?;
-    
+
     if !output.status.success() {
         let stderr = decode_cmd_output(&output.stderr);
         if !stderr.contains("not found") && !stderr.contains("没有找到") {
@@ -85,7 +79,7 @@ pub fn kill_kiro() -> Result<(), String> {
         .args(["-x", "Kiro"])
         .output()
         .map_err(|e| format!("Failed to execute pkill: {e}"))?;
-    
+
     if !output.status.success() {
         let stderr = String::from_utf8_lossy(&output.stderr);
         if !stderr.contains("No matching") {
@@ -102,7 +96,7 @@ pub fn kill_kiro() -> Result<(), String> {
         .args(["-f", "kiro"])
         .output()
         .map_err(|e| format!("Failed to execute pkill: {e}"))?;
-    
+
     if !output.status.success() {
         let stderr = String::from_utf8_lossy(&output.stderr);
         if !stderr.is_empty() {
@@ -115,38 +109,37 @@ pub fn kill_kiro() -> Result<(), String> {
 /// 启动 Kiro IDE（内部函数）
 #[cfg(target_os = "windows")]
 pub fn launch_kiro() -> Result<(), String> {
-    let localappdata = std::env::var("LOCALAPPDATA")
-        .map_err(|_| "Cannot find LOCALAPPDATA")?;
-    
+    let localappdata = std::env::var("LOCALAPPDATA").map_err(|_| "Cannot find LOCALAPPDATA")?;
+
     let kiro_path = std::path::Path::new(&localappdata)
         .join("Programs")
         .join("Kiro")
         .join("Kiro.exe");
-    
+
     if !kiro_path.exists() {
         return Err(format!("Kiro IDE not found at: {}", kiro_path.display()));
     }
-    
+
     Command::new(&kiro_path)
         .spawn()
         .map_err(|e| format!("Failed to start Kiro IDE: {e}"))?;
-    
+
     Ok(())
 }
 
 #[cfg(target_os = "macos")]
 pub fn launch_kiro() -> Result<(), String> {
     let kiro_path = "/Applications/Kiro.app";
-    
+
     if !std::path::Path::new(kiro_path).exists() {
         return Err(format!("Kiro IDE not found at: {}", kiro_path));
     }
-    
+
     Command::new("open")
         .args(["-a", "Kiro"])
         .spawn()
         .map_err(|e| format!("Failed to start Kiro IDE: {e}"))?;
-    
+
     Ok(())
 }
 
@@ -157,7 +150,7 @@ pub fn launch_kiro() -> Result<(), String> {
     if Command::new("kiro").spawn().is_ok() {
         return Ok(());
     }
-    
+
     // 尝试 /usr/bin/kiro
     let kiro_path = "/usr/bin/kiro";
     if std::path::Path::new(kiro_path).exists() {
@@ -166,7 +159,7 @@ pub fn launch_kiro() -> Result<(), String> {
             .map_err(|e| format!("Failed to start Kiro IDE: {e}"))?;
         return Ok(());
     }
-    
+
     // 尝试 ~/.local/bin/kiro
     if let Ok(home) = std::env::var("HOME") {
         let local_path = format!("{}/.local/bin/kiro", home);
@@ -177,7 +170,7 @@ pub fn launch_kiro() -> Result<(), String> {
             return Ok(());
         }
     }
-    
+
     Err("Kiro IDE not found. Please ensure it's installed and in PATH.".to_string())
 }
 

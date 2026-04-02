@@ -1,5 +1,5 @@
 // 账号统计计算工具函数
-import { isActiveStatus, isBannedStatus, isUnavailableStatus } from './accountStatus'
+import { isActiveStatus, isBannedStatus, isCappedStatus, isUnavailableStatus } from './accountStatus'
 
 // 获取账号显示名称（email 或 user_id）
 export const getAccountDisplayName = (account) => {
@@ -20,7 +20,7 @@ const getBreakdown = (a) => {
 
 // 获取总配额（主配额 + 未过期的试用 + 未过期的奖励）
 const getQuota = (a) => {
-  if (isUnavailableStatus(a.status)) return 0
+  if (isUnavailableStatus(a) && !isCappedStatus(a)) return 0
 
   const breakdown = getBreakdown(a)
   if (!breakdown) return a.quota ?? 0
@@ -48,7 +48,7 @@ const getQuota = (a) => {
 
 // 获取已使用量（主配额 + 未过期的试用 + 未过期的奖励）
 const getUsed = (a) => {
-  if (isUnavailableStatus(a.status)) return 0
+  if (isUnavailableStatus(a) && !isCappedStatus(a)) return 0
 
   const breakdown = getBreakdown(a)
   if (!breakdown) return a.used ?? 0
@@ -78,9 +78,9 @@ const getSubPlan = (a) => a.usageData?.subscriptionInfo?.subscriptionTitle ?? a.
 
 export function calcAccountStats(accounts) {
   const total = accounts.length
-  const active = accounts.filter(a => isActiveStatus(a.status)).length
-  const banned = accounts.filter(a => isBannedStatus(a.status)).length
-  const unavailable = accounts.filter(a => isUnavailableStatus(a.status)).length
+  const active = accounts.filter(a => isActiveStatus(a)).length
+  const banned = accounts.filter(a => isBannedStatus(a)).length
+  const unavailable = accounts.filter(a => isUnavailableStatus(a)).length
   // 保留精确值，不再取整
   const totalQuota = accounts.reduce((sum, a) => sum + getQuota(a), 0)
   const totalUsed = accounts.reduce((sum, a) => sum + getUsed(a), 0)

@@ -7,24 +7,7 @@
     <title>Kiro Account Manager</title>
   </head>
   <body>
-    <!-- 预加载主题，避免 macOS 黑屏和闪烁 -->
-    <script>
-      (function() {
-        try {
-          const theme = localStorage.getItem('theme') || 'light'
-          const colors = {
-            light: '#f5f5f5',
-            dark: '#0f0f0f',
-            purple: '#1a0f2e',
-            green: '#0f1f0f'
-          }
-          document.body.style.backgroundColor = colors[theme] || colors.light
-        } catch (e) {
-          // localStorage 失败，使用默认浅色
-          document.body.style.backgroundColor = '#f5f5f5'
-        }
-      })()
-    </script>
+    <script src="/theme-preload.js"></script>
     <div id="root"></div>
     <script type="module" src="/src/main.jsx"></script>
   </body>

@@ -34,6 +34,7 @@ pub fn normalize_anthropic_request(request: &AnthropicMessagesRequest) -> Normal
                 content: Some(Value::String(system_text)),
                 tool_calls: None,
                 tool_call_id: None,
+                metadata: None,
             });
         }
     }
@@ -44,6 +45,7 @@ pub fn normalize_anthropic_request(request: &AnthropicMessagesRequest) -> Normal
             content: Some(convert_anthropic_content(&message.content)),
             tool_calls: extract_anthropic_tool_calls(&message.content),
             tool_call_id: extract_anthropic_tool_result_id(&message.content),
+            metadata: extract_anthropic_message_metadata(message),
         });
     }
 
@@ -90,6 +92,7 @@ pub fn normalize_responses_request(payload: &Value) -> Result<NormalizedRequest,
                 content: Some(Value::String(text)),
                 tool_calls: None,
                 tool_call_id: None,
+                metadata: None,
             });
         }
     }
@@ -301,10 +304,7 @@ pub async fn build_kiro_payload(
         {
             match message.role.as_str() {
                 "assistant" => history_items.push(HistoryItem::Assistant {
-                    assistant_response_message: HistoryAssistantMessage {
-                        content: extract_text_content(message.content.as_ref()),
-                        tool_uses: extract_tool_uses(message),
-                    },
+                    assistant_response_message: build_history_assistant_message(message),
                 }),
                 "user" => {
                     let mut content = extract_text_content(message.content.as_ref());
@@ -465,6 +465,7 @@ fn convert_responses_input(input: &Value) -> Vec<NormalizedMessage> {
             content: Some(Value::String(text.clone())),
             tool_calls: None,
             tool_call_id: None,
+            metadata: None,
         }],
         Value::Array(items) => convert_responses_input_items(items),
         _ => Vec::new(),
@@ -485,6 +486,7 @@ fn convert_responses_input_items(items: &[Value]) -> Vec<NormalizedMessage> {
                 content: responses_message_content(item),
                 tool_calls: None,
                 tool_call_id: None,
+                metadata: extract_responses_message_metadata(item, role),
             });
             continue;
         }
@@ -492,15 +494,17 @@ fn convert_responses_input_items(items: &[Value]) -> Vec<NormalizedMessage> {
         match item_type {
             "message" => {
                 flush_pending_responses_user_items(&mut messages, &mut pending_user_items);
+                let role = item
+                    .get("role")
+                    .and_then(Value::as_str)
+                    .unwrap_or("user")
+                    .to_string();
                 messages.push(NormalizedMessage {
-                    role: item
-                        .get("role")
-                        .and_then(Value::as_str)
-                        .unwrap_or("user")
-                        .to_string(),
+                    role: role.clone(),
                     content: responses_message_content(item),
                     tool_calls: None,
                     tool_call_id: None,
+                    metadata: extract_responses_message_metadata(item, &role),
                 });
             }
             "function_call" => {
@@ -537,6 +541,7 @@ fn convert_responses_input_items(items: &[Value]) -> Vec<NormalizedMessage> {
                         },
                     }]),
                     tool_call_id: None,
+                    metadata: None,
                 });
             }
             "function_call_output" => {
@@ -549,6 +554,7 @@ fn convert_responses_input_items(items: &[Value]) -> Vec<NormalizedMessage> {
                         .get("call_id")
                         .and_then(Value::as_str)
                         .map(str::to_string),
+                    metadata: None,
                 });
             }
             "input_text" | "output_text" | "input_image" | "image_url" | "image" => {
@@ -575,6 +581,7 @@ fn flush_pending_responses_user_items(
         content: Some(Value::Array(std::mem::take(pending_user_items))),
         tool_calls: None,
         tool_call_id: None,
+        metadata: None,
     });
 }
 
@@ -589,6 +596,68 @@ fn responses_tool_output_content(output: Option<&Value>) -> Option<Value> {
         None => None,
         Some(Value::String(text)) => Some(Value::String(text.clone())),
         Some(other) => Some(Value::String(other.to_string())),
+    }
+}
+
+fn extract_responses_message_metadata(item: &Value, role: &str) -> Option<Value> {
+    if role != "assistant" {
+        return None;
+    }
+
+    let mut metadata = Map::new();
+    for key in [
+        "reasoningContent",
+        "references",
+        "supplementaryWebLinks",
+        "followupPrompt",
+        "cachePoint",
+    ] {
+        if let Some(value) = meaningful_optional_value(item.get(key).cloned()) {
+            metadata.insert(key.to_string(), value);
+        }
+    }
+
+    if let Some(message_id) = item
+        .get("messageId")
+        .or_else(|| item.get("id"))
+        .and_then(Value::as_str)
+        .filter(|value| !value.trim().is_empty())
+    {
+        metadata.insert(
+            "messageId".to_string(),
+            Value::String(message_id.to_string()),
+        );
+    }
+
+    if !metadata.contains_key("reasoningContent") {
+        if let Some(reasoning) = extract_reasoning_content(item.get("content")) {
+            metadata.insert("reasoningContent".to_string(), reasoning);
+        }
+    }
+
+    if metadata.is_empty() {
+        None
+    } else {
+        Some(Value::Object(metadata))
+    }
+}
+
+fn extract_anthropic_message_metadata(
+    message: &crate::gateway::models::AnthropicMessage,
+) -> Option<Value> {
+    if message.role != "assistant" {
+        return None;
+    }
+
+    let mut metadata = Map::new();
+    if let Some(reasoning) = extract_reasoning_content(Some(&message.content)) {
+        metadata.insert("reasoningContent".to_string(), reasoning);
+    }
+
+    if metadata.is_empty() {
+        None
+    } else {
+        Some(Value::Object(metadata))
     }
 }
 
@@ -791,6 +860,121 @@ fn extract_text_content(content: Option<&Value>) -> String {
             extract_text_blocks(value, &["text", "input_text", "output_text"])
         }
         Some(other) => other.to_string(),
+    }
+}
+
+fn build_history_assistant_message(message: &NormalizedMessage) -> HistoryAssistantMessage {
+    HistoryAssistantMessage {
+        content: extract_text_content(message.content.as_ref()),
+        tool_uses: extract_tool_uses(message),
+        reasoning_content: assistant_metadata_value(message, "reasoningContent")
+            .or_else(|| extract_reasoning_content(message.content.as_ref()))
+            .and_then(|value| meaningful_optional_value(Some(value))),
+        references: assistant_metadata_value(message, "references")
+            .and_then(|value| meaningful_optional_value(Some(value))),
+        supplementary_web_links: assistant_metadata_value(message, "supplementaryWebLinks")
+            .and_then(|value| meaningful_optional_value(Some(value))),
+        followup_prompt: assistant_metadata_value(message, "followupPrompt")
+            .and_then(|value| meaningful_optional_value(Some(value))),
+        message_id: assistant_metadata_value(message, "messageId")
+            .and_then(|value| value.as_str().map(str::to_string))
+            .filter(|value| !value.trim().is_empty()),
+        cache_point: assistant_metadata_value(message, "cachePoint")
+            .and_then(|value| meaningful_optional_value(Some(value))),
+    }
+}
+
+fn assistant_metadata_value(message: &NormalizedMessage, key: &str) -> Option<Value> {
+    message
+        .metadata
+        .as_ref()
+        .and_then(|value| value.get(key).cloned())
+        .or_else(|| {
+            message
+                .content
+                .as_ref()
+                .and_then(|value| value.get(key).cloned())
+        })
+}
+
+fn extract_reasoning_content(content: Option<&Value>) -> Option<Value> {
+    let content = content?;
+
+    if let Some(existing) = content.get("reasoningContent") {
+        return meaningful_optional_value(Some(existing.clone()));
+    }
+
+    let content_items = content.get("content").unwrap_or(content);
+    let Value::Array(items) = content_items else {
+        return None;
+    };
+
+    let mut texts = Vec::new();
+    let mut signature: Option<Value> = None;
+    let mut redacted_content: Option<Value> = None;
+
+    for item in items {
+        let item_type = item.get("type").and_then(Value::as_str).unwrap_or_default();
+        if item_type != "reasoning" && item_type != "thinking" {
+            continue;
+        }
+
+        if let Some(text) = item
+            .get("summary")
+            .map(|value| extract_text_content(Some(value)))
+        {
+            if !text.is_empty() {
+                texts.push(text);
+            }
+        } else if let Some(text) = item.get("thinking").and_then(Value::as_str) {
+            if !text.is_empty() {
+                texts.push(text.to_string());
+            }
+        } else if let Some(text) = item.get("text").and_then(Value::as_str) {
+            if !text.is_empty() {
+                texts.push(text.to_string());
+            }
+        }
+
+        if signature.is_none() {
+            signature = item.get("signature").cloned();
+        }
+        if redacted_content.is_none() {
+            redacted_content = item.get("redactedContent").cloned();
+        }
+    }
+
+    if texts.is_empty() && signature.is_none() && redacted_content.is_none() {
+        return None;
+    }
+
+    let mut reasoning_text = Map::new();
+    let merged_text = texts.join("\n");
+    if !merged_text.is_empty() {
+        reasoning_text.insert("text".to_string(), Value::String(merged_text));
+    }
+    if let Some(signature) = signature {
+        reasoning_text.insert("signature".to_string(), signature);
+    }
+
+    let mut reasoning = Map::new();
+    if !reasoning_text.is_empty() {
+        reasoning.insert("reasoningText".to_string(), Value::Object(reasoning_text));
+    }
+    if let Some(redacted_content) = redacted_content {
+        reasoning.insert("redactedContent".to_string(), redacted_content);
+    }
+
+    meaningful_optional_value(Some(Value::Object(reasoning)))
+}
+
+fn meaningful_optional_value(value: Option<Value>) -> Option<Value> {
+    match value {
+        Some(Value::Null) => None,
+        Some(Value::String(text)) if text.trim().is_empty() => None,
+        Some(Value::Array(items)) if items.is_empty() => None,
+        Some(Value::Object(map)) if map.is_empty() => None,
+        other => other,
     }
 }
 
@@ -1464,6 +1648,7 @@ mod tests {
                     content: Some(json!("系统要求")),
                     tool_calls: None,
                     tool_call_id: None,
+                    metadata: None,
                 },
                 NormalizedMessage {
                     role: "assistant".to_string(),
@@ -1477,18 +1662,21 @@ mod tests {
                         },
                     }]),
                     tool_call_id: None,
+                    metadata: None,
                 },
                 NormalizedMessage {
                     role: "tool".to_string(),
                     content: Some(json!("命中结果")),
                     tool_calls: None,
                     tool_call_id: Some("call_1".to_string()),
+                    metadata: None,
                 },
                 NormalizedMessage {
                     role: "user".to_string(),
                     content: Some(json!("继续总结")),
                     tool_calls: None,
                     tool_call_id: None,
+                    metadata: None,
                 },
             ],
             stream: true,
@@ -1567,6 +1755,7 @@ mod tests {
                 content: Some(json!("hello")),
                 tool_calls: None,
                 tool_call_id: None,
+                metadata: None,
             }],
             stream: false,
             max_tokens: Some(1024),
@@ -1600,6 +1789,7 @@ mod tests {
                 content: Some(json!("hello")),
                 tool_calls: None,
                 tool_call_id: None,
+                metadata: None,
             }],
             stream: false,
             max_tokens: Some(1024),
@@ -1764,6 +1954,48 @@ mod tests {
         assert_eq!(converted.messages[2].content, Some(json!("命中结果")));
     }
 
+    #[test]
+    fn normalize_responses_request_preserves_assistant_message_metadata() {
+        let payload = json!({
+            "model": "claude-3-7-sonnet-20250219",
+            "input": [
+                {
+                    "type": "message",
+                    "role": "assistant",
+                    "id": "msg_history_1",
+                    "cachePoint": { "type": "default" },
+                    "content": [
+                        { "type": "output_text", "text": "历史回答" },
+                        { "type": "reasoning", "summary": "内部推理" }
+                    ]
+                },
+                {
+                    "type": "message",
+                    "role": "user",
+                    "content": [{ "type": "input_text", "text": "继续" }]
+                }
+            ]
+        });
+
+        let converted =
+            normalize_responses_request(&payload).expect("responses payload should convert");
+
+        assert_eq!(converted.messages.len(), 2);
+        assert_eq!(converted.messages[0].role, "assistant");
+        assert_eq!(
+            converted.messages[0].metadata,
+            Some(json!({
+                "messageId": "msg_history_1",
+                "cachePoint": { "type": "default" },
+                "reasoningContent": {
+                    "reasoningText": {
+                        "text": "内部推理"
+                    }
+                }
+            }))
+        );
+    }
+
     #[tokio::test]
     async fn build_kiro_payload_extracts_base64_images() {
         let request = NormalizedRequest {
@@ -1786,6 +2018,7 @@ mod tests {
                 ])),
                 tool_calls: None,
                 tool_call_id: None,
+                metadata: None,
             }],
             stream: false,
             max_tokens: None,
@@ -1873,6 +2106,7 @@ mod tests {
                 ])),
                 tool_calls: None,
                 tool_call_id: None,
+                metadata: None,
             }],
             stream: false,
             max_tokens: None,
@@ -1917,6 +2151,7 @@ mod tests {
                 ])),
                 tool_calls: None,
                 tool_call_id: None,
+                metadata: None,
             }],
             stream: false,
             max_tokens: None,
@@ -1936,6 +2171,136 @@ mod tests {
             .user_input_message;
 
         assert!(current.images.as_ref().map(Vec::is_empty).unwrap_or(true));
+    }
+
+    #[tokio::test]
+    async fn build_kiro_payload_preserves_assistant_message_metadata() {
+        let request = NormalizedRequest {
+            model: "claude-sonnet-4-5-20250929".to_string(),
+            messages: vec![
+                NormalizedMessage {
+                    role: "assistant".to_string(),
+                    content: Some(json!([
+                        { "type": "output_text", "text": "历史回答" },
+                        { "type": "reasoning", "summary": "内部推理" }
+                    ])),
+                    tool_calls: Some(vec![ToolCall {
+                        id: "call_1".to_string(),
+                        call_type: "function".to_string(),
+                        function: ToolCallFunction {
+                            name: "search_docs".to_string(),
+                            arguments: "{\"q\":\"gateway\"}".to_string(),
+                        },
+                    }]),
+                    tool_call_id: None,
+                    metadata: Some(json!({
+                        "reasoningContent": {
+                            "reasoningText": {
+                                "text": "内部推理",
+                                "signature": "sig_1"
+                            }
+                        },
+                        "references": [
+                            {
+                                "licenseName": "MIT",
+                                "repository": "repo",
+                                "url": "https://example.com/ref"
+                            }
+                        ],
+                        "supplementaryWebLinks": [
+                            {
+                                "url": "https://example.com",
+                                "title": "example",
+                                "snippet": "snippet"
+                            }
+                        ],
+                        "followupPrompt": {
+                            "content": "继续",
+                            "userIntent": "SHOW_EXAMPLES"
+                        },
+                        "messageId": "msg_123",
+                        "cachePoint": {
+                            "type": "default"
+                        }
+                    })),
+                },
+                NormalizedMessage {
+                    role: "user".to_string(),
+                    content: Some(Value::String("继续".to_string())),
+                    tool_calls: None,
+                    tool_call_id: None,
+                    metadata: None,
+                },
+            ],
+            stream: false,
+            max_tokens: None,
+            temperature: None,
+            top_p: None,
+            stop: None,
+            tools: None,
+            tool_choice: None,
+        };
+
+        let payload = build_kiro_payload(&Client::new(), &request, None)
+            .await
+            .expect("payload should build");
+        let history = payload
+            .conversation_state
+            .history
+            .expect("history should exist");
+
+        match &history[0] {
+            HistoryItem::Assistant {
+                assistant_response_message,
+            } => {
+                assert_eq!(assistant_response_message.content, "历史回答");
+                assert_eq!(
+                    assistant_response_message.reasoning_content,
+                    Some(json!({
+                        "reasoningText": {
+                            "text": "内部推理",
+                            "signature": "sig_1"
+                        }
+                    }))
+                );
+                assert_eq!(
+                    assistant_response_message.references,
+                    Some(json!([
+                        {
+                            "licenseName": "MIT",
+                            "repository": "repo",
+                            "url": "https://example.com/ref"
+                        }
+                    ]))
+                );
+                assert_eq!(
+                    assistant_response_message.supplementary_web_links,
+                    Some(json!([
+                        {
+                            "url": "https://example.com",
+                            "title": "example",
+                            "snippet": "snippet"
+                        }
+                    ]))
+                );
+                assert_eq!(
+                    assistant_response_message.followup_prompt,
+                    Some(json!({
+                        "content": "继续",
+                        "userIntent": "SHOW_EXAMPLES"
+                    }))
+                );
+                assert_eq!(
+                    assistant_response_message.message_id.as_deref(),
+                    Some("msg_123")
+                );
+                assert_eq!(
+                    assistant_response_message.cache_point,
+                    Some(json!({ "type": "default" }))
+                );
+            }
+            other => panic!("unexpected history item: {other:?}"),
+        }
     }
 
     #[test]

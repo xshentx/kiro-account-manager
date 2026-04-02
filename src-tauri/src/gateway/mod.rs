@@ -18,7 +18,7 @@ use std::{
     fs,
     io::{BufRead, BufReader, Write},
     net::{IpAddr, SocketAddr},
-    path::PathBuf,
+    path::{Path, PathBuf},
     sync::{
         atomic::{AtomicU64, Ordering},
         Arc,
@@ -288,6 +288,63 @@ fn request_log_path() -> Result<PathBuf, String> {
     Ok(gateway_log_dir_raw()?.join(REQUEST_LOG_FILE))
 }
 
+fn append_gateway_request_log_to_path(
+    path: &Path,
+    entry: &GatewayRequestLogEntry,
+) -> Result<(), String> {
+    if let Some(parent) = path.parent() {
+        fs::create_dir_all(parent).map_err(|e| format!("创建请求日志目录失败: {e}"))?;
+    }
+    let mut file = fs::OpenOptions::new()
+        .create(true)
+        .append(true)
+        .open(path)
+        .map_err(|e| format!("打开请求日志失败: {e}"))?;
+    let serialized =
+        serde_json::to_string(entry).map_err(|e| format!("序列化请求日志失败: {e}"))?;
+    writeln!(file, "{serialized}").map_err(|e| format!("写入请求日志失败: {e}"))
+}
+
+fn get_gateway_request_logs_from_path(
+    path: &Path,
+    limit: Option<usize>,
+) -> Result<Vec<GatewayRequestLogEntry>, String> {
+    if !path.exists() {
+        return Ok(Vec::new());
+    }
+
+    let file = fs::File::open(path).map_err(|e| format!("读取请求日志失败: {e}"))?;
+    let reader = BufReader::new(file);
+    let max_items = limit.unwrap_or(100).clamp(1, 500);
+    let mut entries = Vec::new();
+
+    for line in reader.lines() {
+        let Ok(line) = line else {
+            continue;
+        };
+        let trimmed = line.trim();
+        if trimmed.is_empty() {
+            continue;
+        }
+        if let Ok(entry) = serde_json::from_str::<GatewayRequestLogEntry>(trimmed) {
+            entries.push(entry);
+        }
+    }
+
+    let start = entries.len().saturating_sub(max_items);
+    let mut recent = entries.split_off(start);
+    recent.reverse();
+    Ok(recent)
+}
+
+fn clear_gateway_request_logs_at_path(path: &Path) -> Result<(), String> {
+    if !path.exists() {
+        return Ok(());
+    }
+
+    fs::remove_file(path).map_err(|e| format!("清空请求日志失败: {e}"))
+}
+
 fn gateway_data_dir() -> PathBuf {
     dirs::data_dir()
         .unwrap_or_else(|| {
@@ -338,55 +395,19 @@ pub fn save_gateway_config(config: &GatewayConfig) -> Result<(), String> {
 
 pub fn append_gateway_request_log(entry: &GatewayRequestLogEntry) -> Result<(), String> {
     let path = request_log_path()?;
-    let mut file = fs::OpenOptions::new()
-        .create(true)
-        .append(true)
-        .open(path)
-        .map_err(|e| format!("打开请求日志失败: {e}"))?;
-    let serialized =
-        serde_json::to_string(entry).map_err(|e| format!("序列化请求日志失败: {e}"))?;
-    writeln!(file, "{serialized}").map_err(|e| format!("写入请求日志失败: {e}"))
+    append_gateway_request_log_to_path(&path, entry)
 }
 
 pub fn get_gateway_request_logs(
     limit: Option<usize>,
 ) -> Result<Vec<GatewayRequestLogEntry>, String> {
     let path = request_log_path()?;
-    if !path.exists() {
-        return Ok(Vec::new());
-    }
-
-    let file = fs::File::open(path).map_err(|e| format!("读取请求日志失败: {e}"))?;
-    let reader = BufReader::new(file);
-    let max_items = limit.unwrap_or(100).clamp(1, 500);
-    let mut entries = Vec::new();
-
-    for line in reader.lines() {
-        let Ok(line) = line else {
-            continue;
-        };
-        let trimmed = line.trim();
-        if trimmed.is_empty() {
-            continue;
-        }
-        if let Ok(entry) = serde_json::from_str::<GatewayRequestLogEntry>(trimmed) {
-            entries.push(entry);
-        }
-    }
-
-    let start = entries.len().saturating_sub(max_items);
-    let mut recent = entries.split_off(start);
-    recent.reverse();
-    Ok(recent)
+    get_gateway_request_logs_from_path(&path, limit)
 }
 
 pub fn clear_gateway_request_logs() -> Result<(), String> {
     let path = request_log_path()?;
-    if !path.exists() {
-        return Ok(());
-    }
-
-    fs::remove_file(&path).map_err(|e| format!("清空请求日志失败: {e}"))
+    clear_gateway_request_logs_at_path(&path)
 }
 
 pub async fn start_gateway(
@@ -617,10 +638,48 @@ mod tests {
     use axum::body::Body;
     use axum::http::{Method, Request, StatusCode};
     use serde_json::json;
-    use std::sync::{atomic::AtomicU64, Mutex};
+    use std::{
+        process,
+        sync::{
+            atomic::{AtomicU64, Ordering},
+            Mutex,
+        },
+    };
     use tower::util::ServiceExt;
 
     static REQUEST_LOG_TEST_MUTEX: Mutex<()> = Mutex::new(());
+    static REQUEST_LOG_TEST_DIR_COUNTER: AtomicU64 = AtomicU64::new(0);
+
+    struct RequestLogTestFixture {
+        path: PathBuf,
+        _guard: std::sync::MutexGuard<'static, ()>,
+    }
+
+    impl RequestLogTestFixture {
+        fn new() -> Self {
+            let guard = REQUEST_LOG_TEST_MUTEX
+                .lock()
+                .expect("request log test mutex should lock");
+            let dir = std::env::temp_dir().join(format!(
+                "kiro-gateway-request-log-test-{}-{}",
+                process::id(),
+                REQUEST_LOG_TEST_DIR_COUNTER.fetch_add(1, Ordering::Relaxed)
+            ));
+            fs::create_dir_all(&dir).expect("request log test dir should create");
+            Self {
+                path: dir.join(REQUEST_LOG_FILE),
+                _guard: guard,
+            }
+        }
+    }
+
+    impl Drop for RequestLogTestFixture {
+        fn drop(&mut self) {
+            if let Some(dir) = self.path.parent() {
+                let _ = fs::remove_dir_all(dir);
+            }
+        }
+    }
 
     #[test]
     fn config_path_uses_roaming_appdata_root() {
@@ -650,15 +709,8 @@ mod tests {
 
     #[test]
     fn gateway_request_logs_round_trip_recent_entries() {
-        let _guard = REQUEST_LOG_TEST_MUTEX
-            .lock()
-            .expect("request log test mutex should lock");
-        let path = request_log_path().expect("request log path should resolve");
-        let backup = fs::read_to_string(&path).ok();
-
-        if path.exists() {
-            fs::remove_file(&path).expect("existing request log should be removable");
-        }
+        let fixture = RequestLogTestFixture::new();
+        let path = fixture.path.as_path();
 
         let success_entry = GatewayRequestLogEntry {
             occurred_at: "2026-03-21 18:00:00".to_string(),
@@ -693,10 +745,12 @@ mod tests {
             response_body: Some(r#"{"message":"upstream failed"}"#.to_string()),
         };
 
-        append_gateway_request_log(&success_entry).expect("success entry should append");
-        append_gateway_request_log(&error_entry).expect("error entry should append");
+        append_gateway_request_log_to_path(path, &success_entry)
+            .expect("success entry should append");
+        append_gateway_request_log_to_path(path, &error_entry).expect("error entry should append");
 
-        let logs = get_gateway_request_logs(Some(10)).expect("request logs should read");
+        let logs =
+            get_gateway_request_logs_from_path(path, Some(10)).expect("request logs should read");
         assert_eq!(logs.len(), 2);
         assert_eq!(logs[0].request_index, 2);
         assert_eq!(logs[1].request_index, 1);
@@ -708,58 +762,36 @@ mod tests {
             logs[1].response_body.as_deref(),
             Some(r#"{"id":"resp_123"}"#)
         );
-
-        match backup {
-            Some(content) => fs::write(&path, content).expect("request log backup should restore"),
-            None => {
-                if path.exists() {
-                    fs::remove_file(&path).expect("temporary request log should remove");
-                }
-            }
-        }
     }
 
     #[test]
     fn clear_gateway_request_logs_removes_log_file() {
-        let _guard = REQUEST_LOG_TEST_MUTEX
-            .lock()
-            .expect("request log test mutex should lock");
-        let path = request_log_path().expect("request log path should resolve");
-        let backup = fs::read_to_string(&path).ok();
+        let fixture = RequestLogTestFixture::new();
+        let path = fixture.path.as_path();
 
-        if path.exists() {
-            fs::remove_file(&path).expect("existing request log should be removable");
-        }
-
-        append_gateway_request_log(&GatewayRequestLogEntry {
-            occurred_at: "2026-03-21 18:00:02".to_string(),
-            request_index: 3,
-            endpoint: "responses".to_string(),
-            client_ip: "127.0.0.1".to_string(),
-            model: Some("claude-sonnet-4.6".to_string()),
-            stream: false,
-            upstream_source: Some("测试账号".to_string()),
-            region: Some("us-east-1".to_string()),
-            status_code: 200,
-            outcome: "success".to_string(),
-            duration_ms: 110,
-            error: None,
-            request_body: Some(r#"{"model":"claude-sonnet-4-6"}"#.to_string()),
-            response_body: Some(r#"{"id":"resp_456"}"#.to_string()),
-        })
+        append_gateway_request_log_to_path(
+            path,
+            &GatewayRequestLogEntry {
+                occurred_at: "2026-03-21 18:00:02".to_string(),
+                request_index: 3,
+                endpoint: "responses".to_string(),
+                client_ip: "127.0.0.1".to_string(),
+                model: Some("claude-sonnet-4.6".to_string()),
+                stream: false,
+                upstream_source: Some("测试账号".to_string()),
+                region: Some("us-east-1".to_string()),
+                status_code: 200,
+                outcome: "success".to_string(),
+                duration_ms: 110,
+                error: None,
+                request_body: Some(r#"{"model":"claude-sonnet-4-6"}"#.to_string()),
+                response_body: Some(r#"{"id":"resp_456"}"#.to_string()),
+            },
+        )
         .expect("request log entry should append");
 
-        clear_gateway_request_logs().expect("request log file should clear");
+        clear_gateway_request_logs_at_path(path).expect("request log file should clear");
         assert!(!path.exists(), "request log file should be removed");
-
-        match backup {
-            Some(content) => fs::write(&path, content).expect("request log backup should restore"),
-            None => {
-                if path.exists() {
-                    fs::remove_file(&path).expect("temporary request log should remove");
-                }
-            }
-        }
     }
 
     fn test_router_state() -> RouterState {
