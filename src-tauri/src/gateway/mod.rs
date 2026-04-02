@@ -15,6 +15,7 @@ use reqwest::Client;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use std::{
+    cell::RefCell,
     fs,
     io::{BufRead, BufReader, Write},
     net::{IpAddr, SocketAddr},
@@ -32,6 +33,21 @@ use tokio::{
 };
 
 use crate::http_client::{build_http_client_with_timeout, is_supported_kiro_region};
+
+#[cfg(test)]
+thread_local! {
+    static REQUEST_LOG_PATH_OVERRIDE: RefCell<Option<PathBuf>> = const { RefCell::new(None) };
+}
+
+#[cfg(test)]
+fn request_log_path_override() -> Option<PathBuf> {
+    REQUEST_LOG_PATH_OVERRIDE.with(|cell| cell.borrow().clone())
+}
+
+#[cfg(test)]
+fn set_request_log_path_override(path: Option<PathBuf>) {
+    REQUEST_LOG_PATH_OVERRIDE.with(|cell| *cell.borrow_mut() = path);
+}
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -285,6 +301,10 @@ fn config_path() -> Result<PathBuf, String> {
 }
 
 fn request_log_path() -> Result<PathBuf, String> {
+    #[cfg(test)]
+    if let Some(path) = request_log_path_override() {
+        return Ok(path);
+    }
     Ok(gateway_log_dir_raw()?.join(REQUEST_LOG_FILE))
 }
 
@@ -649,7 +669,7 @@ async fn mcp_handler(
 mod tests {
     use super::*;
     use axum::body::Body;
-    use axum::http::{Method, Request, StatusCode};
+    use axum::http::{header::AUTHORIZATION, HeaderMap, HeaderValue, Method, Request, StatusCode};
     use serde_json::json;
     use std::{
         process,
@@ -679,8 +699,10 @@ mod tests {
                 REQUEST_LOG_TEST_DIR_COUNTER.fetch_add(1, Ordering::Relaxed)
             ));
             fs::create_dir_all(&dir).expect("request log test dir should create");
+            let path = dir.join(REQUEST_LOG_FILE);
+            set_request_log_path_override(Some(path.clone()));
             Self {
-                path: dir.join(REQUEST_LOG_FILE),
+                path,
                 _guard: guard,
             }
         }
@@ -688,10 +710,31 @@ mod tests {
 
     impl Drop for RequestLogTestFixture {
         fn drop(&mut self) {
+            set_request_log_path_override(None);
             if let Some(dir) = self.path.parent() {
                 let _ = fs::remove_dir_all(dir);
             }
         }
+    }
+
+    fn gateway_runtime_test_state() -> RouterState {
+        RouterState {
+            config: GatewayConfig {
+                access_token: Some("sk-test".to_string()),
+                account_mode: "single".to_string(),
+                account_id: Some("test-account".to_string()),
+                ..GatewayConfig::default()
+            },
+            request_count: Arc::new(AtomicU64::new(0)),
+            last_error: Arc::new(AsyncMutex::new(None)),
+            http: Client::new(),
+        }
+    }
+
+    fn auth_headers() -> HeaderMap {
+        let mut headers = HeaderMap::new();
+        headers.insert(AUTHORIZATION, HeaderValue::from_static("Bearer sk-test"));
+        headers
     }
 
     #[test]
@@ -916,6 +959,108 @@ mod tests {
             .expect("router should respond");
 
         assert_ne!(response.status(), StatusCode::NOT_FOUND);
+    }
+
+    #[tokio::test(flavor = "current_thread")]
+    async fn lightweight_routes_increment_request_count_and_write_logs() {
+        let fixture = RequestLogTestFixture::new();
+        let state = gateway_runtime_test_state();
+        let client_addr: SocketAddr = "127.0.0.1:4317".parse().expect("socket addr should parse");
+
+        let health = proxy::health_handler(state.clone(), client_addr, auth_headers()).await;
+        assert_eq!(health.status(), StatusCode::OK);
+
+        let models = proxy::models_handler(state.clone(), client_addr, auth_headers()).await;
+        assert_eq!(models.status(), StatusCode::OK);
+
+        let count_tokens = proxy::count_tokens_handler(
+            state.clone(),
+            client_addr,
+            auth_headers(),
+            json!({
+                "model": "claude-sonnet-4-5-20250929",
+                "messages": [{ "role": "user", "content": "hello world" }]
+            }),
+        )
+        .await;
+        assert_eq!(count_tokens.status(), StatusCode::OK);
+
+        assert_eq!(state.request_count.load(Ordering::Relaxed), 3);
+
+        let logs = get_gateway_request_logs_from_path(fixture.path.as_path(), Some(10))
+            .expect("request logs should read");
+        assert_eq!(logs.len(), 3);
+        assert_eq!(logs[0].endpoint, "count_tokens");
+        assert_eq!(logs[1].endpoint, "models");
+        assert_eq!(logs[2].endpoint, "health");
+        assert_eq!(logs[0].status_code, 200);
+        assert_eq!(logs[1].status_code, 200);
+        assert_eq!(logs[2].status_code, 200);
+        assert_eq!(logs[0].outcome, "success");
+        assert_eq!(logs[1].outcome, "success");
+        assert_eq!(logs[2].outcome, "success");
+        assert_eq!(logs[0].client_ip, "127.0.0.1");
+        assert!(
+            logs[0]
+                .request_body
+                .as_deref()
+                .is_some_and(|body| body.contains("\"hello world\"")),
+            "count_tokens request body should be logged"
+        );
+        let count_tokens_response = logs[0]
+            .response_body
+            .as_deref()
+            .and_then(|body| serde_json::from_str::<Value>(body).ok())
+            .expect("count_tokens response body should be logged as json");
+        assert_eq!(
+            count_tokens_response
+                .get("input_tokens")
+                .and_then(Value::as_u64),
+            Some(2)
+        );
+    }
+
+    #[tokio::test(flavor = "current_thread")]
+    async fn mcp_route_increments_request_count_and_writes_error_log() {
+        let fixture = RequestLogTestFixture::new();
+        let state = gateway_runtime_test_state();
+        let client_addr: SocketAddr = "127.0.0.1:4318".parse().expect("socket addr should parse");
+
+        let response = proxy::mcp_proxy_handler(
+            state.clone(),
+            client_addr,
+            auth_headers(),
+            json!({
+                "jsonrpc": "2.0",
+                "id": 1,
+                "method": "tools/list",
+                "params": {}
+            }),
+        )
+        .await;
+
+        assert_eq!(state.request_count.load(Ordering::Relaxed), 1);
+        assert!(response.status().is_client_error() || response.status().is_server_error());
+
+        let logs = get_gateway_request_logs_from_path(fixture.path.as_path(), Some(10))
+            .expect("request logs should read");
+        assert_eq!(logs.len(), 1);
+        assert_eq!(logs[0].endpoint, "mcp");
+        assert_eq!(logs[0].client_ip, "127.0.0.1");
+        assert_eq!(logs[0].request_index, 0);
+        assert_eq!(logs[0].outcome, "error");
+        assert_eq!(logs[0].status_code, response.status().as_u16());
+        assert!(
+            logs[0]
+                .request_body
+                .as_deref()
+                .is_some_and(|body| body.contains("\"tools/list\"")),
+            "mcp request body should be logged"
+        );
+        assert!(
+            state.last_error.lock().await.is_some(),
+            "mcp error should update last_error"
+        );
     }
 
     #[test]
