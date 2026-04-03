@@ -15,7 +15,6 @@ use reqwest::Client;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use std::{
-    cell::RefCell,
     fs,
     io::{BufRead, BufReader, Write},
     net::{IpAddr, SocketAddr},
@@ -36,7 +35,7 @@ use crate::http_client::{build_http_client_with_timeout, is_supported_kiro_regio
 
 #[cfg(test)]
 thread_local! {
-    static REQUEST_LOG_PATH_OVERRIDE: RefCell<Option<PathBuf>> = const { RefCell::new(None) };
+    static REQUEST_LOG_PATH_OVERRIDE: std::cell::RefCell<Option<PathBuf>> = const { std::cell::RefCell::new(None) };
 }
 
 #[cfg(test)]
