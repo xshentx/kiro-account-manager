@@ -21,7 +21,7 @@ function Settings() {
     const isLightTheme = checkIsLightTheme(theme)
 
     const [aiModel, setAiModel] = useState('claude-sonnet-4.5')
-    const [lockModel, setLockModel] = useState(true)
+    const [lockModel, setLockModel] = useState(false)
     const [autoRefresh, setAutoRefresh] = useState(true)
     const [autoRefreshInterval, setAutoRefreshInterval] = useState(50) // 分钟
     const [autoChangeMachineId, setAutoChangeMachineId] = useState(true) // 默认开启
@@ -125,7 +125,7 @@ function Settings() {
             }
             // 从应用设置读取
             if (appSettings) {
-                setLockModel(appSettings.lockModel ?? true)
+                setLockModel(appSettings.lockModel ?? false)
                 setAutoRefresh(appSettings.autoRefresh ?? true)
                 setAutoRefreshInterval(appSettings.autoRefreshInterval ?? 50)
                 setAutoChangeMachineId(appSettings.autoChangeMachineId !== false) // 默认 true

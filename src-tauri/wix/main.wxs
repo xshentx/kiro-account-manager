@@ -36,7 +36,10 @@
         {{#if allow_downgrades}}
             <MajorUpgrade Schedule="afterInstallInitialize" AllowDowngrades="yes" />
         {{else}}
-            <MajorUpgrade Schedule="afterInstallInitialize" DowngradeErrorMessage="!(loc.DowngradeErrorMessage)" />
+            <MajorUpgrade
+                Schedule="afterInstallInitialize"
+                AllowSameVersionUpgrades="yes"
+                DowngradeErrorMessage="!(loc.DowngradeErrorMessage)" />
         {{/if}}
 
         <InstallExecuteSequence>

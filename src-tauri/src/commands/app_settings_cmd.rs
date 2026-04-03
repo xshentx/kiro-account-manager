@@ -50,8 +50,8 @@ impl Default for AppSettings {
         Self {
             theme: Some("dark".to_string()),
             locale: Some("zh-CN".to_string()),
-            lock_model: Some(true),
-            locked_model: Some("claude-opus-4.5".to_string()),
+            lock_model: Some(false),
+            locked_model: None,
             auto_refresh: Some(true),
             auto_refresh_interval: Some(50),
             auto_change_machine_id: Some(true), // 默认开启

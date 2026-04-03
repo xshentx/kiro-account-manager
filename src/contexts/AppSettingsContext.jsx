@@ -6,8 +6,8 @@ const AppSettingsContext = createContext(null)
 
 // 默认设置
 const DEFAULT_SETTINGS = {
-  lockModel: true,
-  lockedModel: 'claude-opus-4.5',
+  lockModel: false,
+  lockedModel: null,
   autoRefresh: true,
   autoRefreshInterval: 50,
   autoChangeMachineId: true,
