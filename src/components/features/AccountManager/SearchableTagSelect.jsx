@@ -2,6 +2,7 @@ import { useState, useRef, useEffect } from 'react'
 import { X, ChevronDown, Tag } from 'lucide-react'
 import { useTheme } from '../../../contexts/ThemeContext'
 import { getThemeAccent } from '../KiroConfig/themeAccent'
+import { isPointerInsideContainer } from './utils/pointerInside'
 
 /**
  * 可搜索的标签选择下拉框
@@ -29,7 +30,7 @@ function SearchableTagSelect({
   // 点击外部关闭
   useEffect(() => {
     const handleClickOutside = (e) => {
-      if (containerRef.current && !containerRef.current.contains(e.target)) {
+      if (containerRef.current && !isPointerInsideContainer(e, containerRef.current)) {
         setOpen(false)
         setSearch('')
       }

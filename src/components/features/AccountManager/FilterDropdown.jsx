@@ -5,6 +5,7 @@ import { useTranslation } from 'react-i18next'
 import SearchableTagSelect from './SearchableTagSelect'
 import { getThemeAccent } from '../KiroConfig/themeAccent'
 import { buildFilterSummaryItems, countActiveFilters } from './utils/filterDropdownState'
+import { isPointerInsideContainer } from './utils/pointerInside'
 
 const SUBSCRIPTION_OPTIONS = [
   { value: '', label: '全部' },
@@ -146,7 +147,7 @@ function FilterDropdown({
 
   useEffect(() => {
     const handleClickOutside = (e) => {
-      if (dropdownRef.current && !dropdownRef.current.contains(e.target)) {
+      if (dropdownRef.current && !isPointerInsideContainer(e, dropdownRef.current)) {
         setOpen(false)
       }
     }
