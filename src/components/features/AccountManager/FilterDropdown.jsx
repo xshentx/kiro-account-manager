@@ -270,30 +270,28 @@ function FilterDropdown({
           </div>
 
           <div className="p-4 space-y-4 max-h-[480px] overflow-y-auto custom-scrollbar max-w-full">
-            {(allGroups.length > 0 || allTags.length > 0) && (
+            {allTags.length > 0 && (
               <SectionCard
                 title="基础筛选"
                 subtitle="优先按标签缩小范围，适合高频定位。"
                 colors={colors}
               >
-                {allTags.length > 0 && (
-                  <div>
-                    <label className={`block text-xs font-medium ${colors.textMuted} mb-2`}>
-                      {t('tags.title')}
-                    </label>
-                    <SearchableTagSelect
-                      tags={allTags}
-                      value={selectedTag}
-                      onChange={onTagFilter}
-                      placeholder={t('tags.searchPlaceholder') || '搜索标签...'}
-                      showAllOption={true}
-                      showNoneOption={true}
-                      allLabel={t('tags.all')}
-                      noneLabel={t('tags.noTags')}
-                      hasLabel={t('tags.hasTags') || '有标签'}
-                    />
-                  </div>
-                )}
+                <div>
+                  <label className={`block text-xs font-medium ${colors.textMuted} mb-2`}>
+                    {t('tags.title')}
+                  </label>
+                  <SearchableTagSelect
+                    tags={allTags}
+                    value={selectedTag}
+                    onChange={onTagFilter}
+                    placeholder={t('tags.searchPlaceholder') || '搜索标签...'}
+                    showAllOption={true}
+                    showNoneOption={true}
+                    allLabel={t('tags.all')}
+                    noneLabel={t('tags.noTags')}
+                    hasLabel={t('tags.hasTags') || '有标签'}
+                  />
+                </div>
               </SectionCard>
             )}
 
