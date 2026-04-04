@@ -2,6 +2,7 @@ import { useState, useEffect, useCallback, useRef } from 'react'
 import { invoke } from '@tauri-apps/api/core'
 import { listen, emit } from '@tauri-apps/api/event'
 import { isUnavailableStatus } from '../../../../utils/accountStatus'
+import { normalizeAccountForUi, getSafeAccountDisplayName } from '../utils/accountRuntime'
 
 export function useAccounts() {
   const [accounts, setAccounts] = useState([])
@@ -32,7 +33,10 @@ export function useAccounts() {
     try {
       setLoading(true)
       const loadedAccounts = await invoke('get_accounts')
-      setAccounts(loadedAccounts)
+      const normalizedAccounts = Array.isArray(loadedAccounts)
+        ? loadedAccounts.map(normalizeAccountForUi)
+        : []
+      setAccounts(normalizedAccounts)
     } catch (e) {
       // 静默处理
     } finally {
@@ -70,7 +74,7 @@ export function useAccounts() {
       let success = false, message = ''
       try {
         const syncResult = await invoke('sync_account', { id: account.id })
-        const updated = syncResult.account
+        const updated = normalizeAccountForUi(syncResult.account)
         const idx = updatedAccounts.findIndex(a => a.id === account.id)
         if (idx !== -1) updatedAccounts[idx] = updated
         success = true
@@ -91,7 +95,7 @@ export function useAccounts() {
         }
       }
       completed++
-      results.push({ email: account.email, success, message })
+      results.push({ email: getSafeAccountDisplayName(account), success, message })
       setRefreshProgress({ current: completed, total: accountsToRefresh.length, currentEmail: '', results: [...results] })
       return { account, success, message }
     }
@@ -99,7 +103,10 @@ export function useAccounts() {
     // 并发控制：分批执行
     for (let i = 0; i < accountsToRefresh.length; i += concurrency) {
       const batch = accountsToRefresh.slice(i, i + concurrency)
-      setRefreshProgress(prev => ({ ...prev, currentEmail: batch.map(a => a.email.split('@')[0]).join(', ') }))
+      setRefreshProgress(prev => ({
+        ...prev,
+        currentEmail: batch.map(a => getSafeAccountDisplayName(a).split('@')[0]).join(', ')
+      }))
       await Promise.all(batch.map(refreshOne))
     }
 
@@ -120,7 +127,7 @@ export function useAccounts() {
     setRefreshingId(id)
     try {
       const syncResult = await invoke('sync_account', { id })
-      const updated = syncResult.account
+      const updated = normalizeAccountForUi(syncResult.account)
       setAccounts(prev => prev.map(a => a.id === id ? updated : a))
       return { success: true, data: updated }
     } catch (e) {

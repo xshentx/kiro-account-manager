@@ -6,6 +6,7 @@ import { ThemeProvider } from './contexts/ThemeContext.jsx'
 import { DialogProvider } from './contexts/DialogContext.jsx'
 import { AppSettingsProvider } from './contexts/AppSettingsContext.jsx'
 import { I18nProvider } from './i18n.jsx'
+import { dismissBootSplash } from './utils/bootSplash.js'
 import '@mantine/core/styles.css'
 import './index.css'
 
@@ -60,6 +61,10 @@ ReactDOM.createRoot(document.getElementById('root')).render(
     </I18nProvider>
   </React.StrictMode>,
 )
+
+requestAnimationFrame(() => {
+  dismissBootSplash()
+})
 
 // 页面加载完成后显示窗口
 const hasCurrentTauriWindow = () => Boolean(window.__TAURI_INTERNALS__?.metadata?.currentWindow)

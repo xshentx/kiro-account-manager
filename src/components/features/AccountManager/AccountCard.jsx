@@ -10,6 +10,7 @@ import { getQuota, getUsed, getSubType, getSubPlan, formatUsage, getAccountDispl
 import { getAccountStatusMeta, isBannedStatus, isUnavailableStatus } from '../../../utils/accountStatus'
 import { getProviderDisplayName, isGitHubProvider } from '../../../utils/accountProvider'
 import { getThemeAccent } from '../KiroConfig/themeAccent'
+import { resolveAvailableModels } from './utils/availableModelsState'
 
 const AccountCard = memo(function AccountCard({
   account,
@@ -62,7 +63,11 @@ const AccountCard = memo(function AccountCard({
   }, [account, t])
 
   const { quota, used, subType, subPlan, percent, statusMeta, isBanned, isNormal, isUnavailable, isExpired, breakdown, nextDateReset } = cardData
-  const hasLoadedAvailableModels = Array.isArray(availableModels)
+  const resolvedAvailableModels = useMemo(
+    () => resolveAvailableModels(availableModels, account),
+    [availableModels, account],
+  )
+  const hasLoadedAvailableModels = Array.isArray(resolvedAvailableModels)
   const availableModelsCache = account.availableModelsCache
   const availableModelsCachedAtText = availableModelsCache?.cachedAt
     ? new Date(availableModelsCache.cachedAt * 1000).toLocaleString()
@@ -308,12 +313,12 @@ const AccountCard = memo(function AccountCard({
                   title={availableModelsLoading
                     ? t('accountCard.loadingModels')
                     : hasLoadedAvailableModels
-                      ? `${availableModels.length} ${t('accountCard.modelCountSuffix')}`
+                      ? `${resolvedAvailableModels.length} ${t('accountCard.modelCountSuffix')}`
                       : t('accountCard.loadModels')}
                   aria-label={availableModelsLoading
                     ? t('accountCard.loadingModels')
                     : hasLoadedAvailableModels
-                      ? `${availableModels.length} ${t('accountCard.modelCountSuffix')}`
+                      ? `${resolvedAvailableModels.length} ${t('accountCard.modelCountSuffix')}`
                       : t('accountCard.loadModels')}
                 >
                   {availableModelsLoading ? (
@@ -352,7 +357,7 @@ const AccountCard = memo(function AccountCard({
                   <div className={`min-w-0 text-sm ${colors.textMuted}`}>
                     <div className={`font-medium ${colors.text}`}>
                       {hasLoadedAvailableModels
-                        ? `${availableModels.length} ${t('accountCard.modelCountSuffix')}`
+                        ? `${resolvedAvailableModels.length} ${t('accountCard.modelCountSuffix')}`
                         : t('accountCard.loadModels')}
                     </div>
                     {availableModelsCachedAtText && (
@@ -386,10 +391,10 @@ const AccountCard = memo(function AccountCard({
                       <span>{t('accountCard.loadingModels')}</span>
                     </div>
                   </div>
-                ) : hasLoadedAvailableModels && availableModels.length > 0 ? (
+                ) : hasLoadedAvailableModels && resolvedAvailableModels.length > 0 ? (
                   <div className={`max-h-[380px] overflow-y-auto rounded-xl border p-4 ${colors.cardSecondary}`}>
                     <div className="flex flex-wrap gap-2">
-                      {availableModels.map(model => {
+                      {resolvedAvailableModels.map(model => {
                         const isDefaultModel = model.isDefault ?? model.is_default ?? false
                         const promptCaching = model.promptCaching ?? model.prompt_caching
                         const supportsPromptCaching = promptCaching?.supportsPromptCaching === true

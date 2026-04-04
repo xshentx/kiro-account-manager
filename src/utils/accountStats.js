@@ -1,9 +1,10 @@
 // 账号统计计算工具函数
 import { isActiveStatus, isBannedStatus, isCappedStatus, isUnavailableStatus } from './accountStatus'
+import { getSafeAccountDisplayName } from '../components/features/AccountManager/utils/accountRuntime'
 
 // 获取账号显示名称（email 或 user_id）
 export const getAccountDisplayName = (account) => {
-  return account.email || account.userId || account.user_id || 'Unknown'
+  return getSafeAccountDisplayName(account)
 }
 
 // 智能格式化使用量：整数显示整数，小数保留2位（去掉末尾0）

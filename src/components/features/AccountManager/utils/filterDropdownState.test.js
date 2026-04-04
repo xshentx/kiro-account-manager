@@ -1,0 +1,62 @@
+import test from 'node:test'
+import assert from 'node:assert/strict'
+import { buildFilterSummaryItems, countActiveFilters } from './filterDropdownState.js'
+
+test('countActiveFilters counts basic and relation filters', () => {
+  const count = countActiveFilters({
+    filters: {
+      subscriptions: ['KIRO PRO'],
+      statuses: ['normal'],
+      providers: [],
+      usageRange: '500-1000',
+    },
+    selectedGroup: 'group-1',
+    selectedTag: '__has__',
+  })
+
+  assert.equal(count, 5)
+})
+
+test('buildFilterSummaryItems resolves readable labels', () => {
+  const items = buildFilterSummaryItems({
+    filters: {
+      subscriptions: ['KIRO PRO'],
+      statuses: ['normal'],
+      providers: ['Google'],
+      usageRange: '500-1000',
+    },
+    selectedGroup: 'group-1',
+    selectedTag: 'tag-1',
+    allGroups: [{ id: 'group-1', name: '主力组' }],
+    allTags: [{ id: 'tag-1', name: '高频' }],
+  })
+
+  assert.deepEqual(items, [
+    { key: 'group', label: '分组', value: '主力组' },
+    { key: 'tag', label: '标签', value: '高频' },
+    { key: 'subscription', label: '订阅', value: 'KIRO PRO' },
+    { key: 'status', label: '状态', value: '正常' },
+    { key: 'provider', label: '登录方式', value: 'Google' },
+    { key: 'usageRange', label: '使用量', value: '500-1000' },
+  ])
+})
+
+test('buildFilterSummaryItems handles special pseudo values', () => {
+  const items = buildFilterSummaryItems({
+    filters: {
+      subscriptions: [],
+      statuses: [],
+      providers: [],
+      usageRange: null,
+    },
+    selectedGroup: '__none__',
+    selectedTag: '__has__',
+    allGroups: [],
+    allTags: [],
+  })
+
+  assert.deepEqual(items, [
+    { key: 'group', label: '分组', value: '无分组' },
+    { key: 'tag', label: '标签', value: '有标签' },
+  ])
+})

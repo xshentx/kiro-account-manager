@@ -9,6 +9,7 @@ import { getAccountStatusMeta, isBannedStatus, isUnavailableStatus } from '../..
 import { getProviderDisplayName, isGitHubProvider } from '../../../utils/accountProvider'
 import ContextMenu from './ContextMenu'
 import { getThemeAccent, isLightTheme as checkIsLightTheme } from '../KiroConfig/themeAccent'
+import { buildAccountListMaps } from './utils/accountListMaps'
 
 
 const ListRow = memo(function ListRow({
@@ -224,6 +225,10 @@ function AccountListView({
   // 优化：如果父组件传递了 selectedIdsSet，直接使用；否则创建
   const _selectedIdsSet = selectedIdsSet || useMemo(() => new Set(selectedIds), [selectedIds])
   const localRefreshToken = localToken?.refreshToken
+  const { tagMap, groupMap } = useMemo(() => buildAccountListMaps({
+    tagDefinitions,
+    groupDefinitions,
+  }), [tagDefinitions, groupDefinitions])
 
   const rowVirtualizer = useVirtualizer({
     count: accounts.length,

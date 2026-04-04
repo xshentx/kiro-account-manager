@@ -5,9 +5,136 @@
     <link rel="icon" type="image/svg+xml" href="/vite.svg" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <title>Kiro Account Manager</title>
+    <style>
+      :root {
+        color-scheme: dark;
+        --boot-bg: #0b1220;
+        --boot-panel: rgba(15, 23, 42, 0.9);
+        --boot-border: rgba(148, 163, 184, 0.18);
+        --boot-text: #e5edf8;
+        --boot-muted: #94a3b8;
+        --boot-accent: #60a5fa;
+      }
+
+      html,
+      body,
+      #root {
+        width: 100%;
+        height: 100%;
+        margin: 0;
+        background: var(--boot-bg);
+      }
+
+      body {
+        overflow: hidden;
+      }
+
+      #boot-splash {
+        position: fixed;
+        inset: 0;
+        z-index: 9999;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        padding: 24px;
+        background:
+          radial-gradient(circle at top, rgba(96, 165, 250, 0.18), transparent 38%),
+          linear-gradient(160deg, #0b1220 0%, #111827 55%, #020617 100%);
+        font-family: 'Segoe UI', 'Microsoft YaHei UI', sans-serif;
+      }
+
+      #boot-splash[data-state='hidden'] {
+        opacity: 0;
+        pointer-events: none;
+      }
+
+      .boot-card {
+        min-width: min(360px, calc(100vw - 48px));
+        max-width: 420px;
+        padding: 28px 24px;
+        border-radius: 18px;
+        border: 1px solid var(--boot-border);
+        background: var(--boot-panel);
+        box-shadow: 0 20px 60px rgba(2, 6, 23, 0.45);
+        backdrop-filter: blur(14px);
+      }
+
+      .boot-header {
+        display: flex;
+        align-items: center;
+        gap: 14px;
+      }
+
+      .boot-spinner {
+        width: 18px;
+        height: 18px;
+        border-radius: 9999px;
+        border: 2px solid rgba(96, 165, 250, 0.18);
+        border-top-color: var(--boot-accent);
+        animation: boot-spin 0.9s linear infinite;
+      }
+
+      .boot-title {
+        margin: 0;
+        color: var(--boot-text);
+        font-size: 18px;
+        font-weight: 600;
+        letter-spacing: 0.01em;
+      }
+
+      .boot-subtitle {
+        margin: 10px 0 0;
+        color: var(--boot-muted);
+        font-size: 13px;
+        line-height: 1.6;
+      }
+
+      .boot-progress {
+        margin-top: 18px;
+        height: 4px;
+        overflow: hidden;
+        border-radius: 9999px;
+        background: rgba(148, 163, 184, 0.14);
+      }
+
+      .boot-progress::after {
+        content: '';
+        display: block;
+        width: 35%;
+        height: 100%;
+        border-radius: inherit;
+        background: linear-gradient(90deg, #3b82f6 0%, #60a5fa 100%);
+        animation: boot-progress 1.2s ease-in-out infinite;
+      }
+
+      @keyframes boot-spin {
+        to {
+          transform: rotate(360deg);
+        }
+      }
+
+      @keyframes boot-progress {
+        0% {
+          transform: translateX(-120%);
+        }
+        100% {
+          transform: translateX(320%);
+        }
+      }
+    </style>
   </head>
   <body>
     <script src="/theme-preload.js"></script>
+    <div id="boot-splash" aria-live="polite" aria-busy="true">
+      <div class="boot-card">
+        <div class="boot-header">
+          <div class="boot-spinner" aria-hidden="true"></div>
+          <h1 class="boot-title">Kiro Account Manager 正在启动</h1>
+        </div>
+        <p class="boot-subtitle">应用正在加载账号、设置和界面资源，请稍候片刻。</p>
+        <div class="boot-progress" aria-hidden="true"></div>
+      </div>
+    </div>
     <div id="root"></div>
     <script type="module" src="/src/main.jsx"></script>
   </body>

@@ -1,4 +1,4 @@
-import { useState, useEffect, Suspense } from 'react'
+import { useState, useEffect, Suspense, useMemo } from 'react'
 import { invoke } from '@tauri-apps/api/core'
 import { listen } from '@tauri-apps/api/event'
 import { Toaster } from 'react-hot-toast'
@@ -15,6 +15,7 @@ import { useDialog } from './contexts/DialogContext'
 import { AccountProvider } from './contexts/AccountContext'
 import { PrivacyProvider } from './contexts/PrivacyContext'
 import { routes, internalRoutes } from './routes'
+import { getMountedRouteIds, shouldPersistRoute } from './utils/routePersistence'
 
 // 构建路由映射
 const routeMap = Object.fromEntries(routes.map(r => [r.id, r.component]))
@@ -37,6 +38,7 @@ function App() {
     // 从 localStorage 恢复上次的页面
     return localStorage.getItem('activeMenu') || 'home'
   })
+  const [mountedRouteIds, setMountedRouteIds] = useState(() => getMountedRouteIds([], localStorage.getItem('activeMenu') || 'home'))
   const { colors } = useApp()
   const { settings: appSettings, loading: settingsLoading } = useAppSettings()
   const { showError, showInfo } = useDialog()
@@ -46,6 +48,10 @@ function App() {
     if (activeMenu && activeMenu !== 'callback') {
       localStorage.setItem('activeMenu', activeMenu)
     }
+  }, [activeMenu])
+
+  useEffect(() => {
+    setMountedRouteIds(prev => getMountedRouteIds(prev, activeMenu))
   }, [activeMenu])
 
   // 使用抽离的 hooks
@@ -147,16 +153,33 @@ function App() {
     setUser(null)
   }
 
-  // 路由渲染：根据 activeMenu 动态获取组件
+  const routeProps = useMemo(() => ({
+    home: { onNavigate: setActiveMenu },
+    desktopOAuth: { onLogin: () => { handleLogin(); setActiveMenu('accounts') } },
+    accounts: { onNavigate: setActiveMenu },
+  }), [])
+
   const renderContent = () => {
-    const RouteComponent = allRoutes[activeMenu] || allRoutes.home
-    // 特殊处理需要 props 的路由
-    const routeProps = {
-      home: { onNavigate: setActiveMenu },
-      desktopOAuth: { onLogin: () => { handleLogin(); setActiveMenu('accounts') } },
-      accounts: { onNavigate: setActiveMenu },
+    if (!shouldPersistRoute(activeMenu)) {
+      const RouteComponent = allRoutes[activeMenu] || allRoutes.home
+      return <RouteComponent {...(routeProps[activeMenu] || {})} />
     }
-    return <RouteComponent {...(routeProps[activeMenu] || {})} />
+
+    return mountedRouteIds.map((routeId) => {
+      const RouteComponent = allRoutes[routeId]
+      if (!RouteComponent) return null
+
+      return (
+        <section
+          key={routeId}
+          className="h-full w-full"
+          style={{ display: routeId === activeMenu ? 'block' : 'none' }}
+          aria-hidden={routeId === activeMenu ? 'false' : 'true'}
+        >
+          <RouteComponent {...(routeProps[routeId] || {})} />
+        </section>
+      )
+    })
   }
 
   if (loading) {
