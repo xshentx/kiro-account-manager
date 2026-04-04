@@ -1,6 +1,6 @@
 import test from 'node:test'
 import assert from 'node:assert/strict'
-import { buildFilterSummaryItems, countActiveFilters } from './filterDropdownState.js'
+import { buildFilterSummaryItems, countActiveFilters, resolveGroupFilterLabel } from './filterDropdownState.js'
 
 test('countActiveFilters counts basic and relation filters', () => {
   const count = countActiveFilters({
@@ -59,4 +59,13 @@ test('buildFilterSummaryItems handles special pseudo values', () => {
     { key: 'group', label: '分组', value: '无分组' },
     { key: 'tag', label: '标签', value: '有标签' },
   ])
+})
+
+test('resolveGroupFilterLabel resolves normal and pseudo group values', () => {
+  assert.equal(
+    resolveGroupFilterLabel('group-1', [{ id: 'group-1', name: '主力组' }]),
+    '主力组'
+  )
+  assert.equal(resolveGroupFilterLabel('__has__', []), '有分组')
+  assert.equal(resolveGroupFilterLabel(null, []), '')
 })

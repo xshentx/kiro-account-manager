@@ -20,6 +20,13 @@ function pickFirst(values) {
   return Array.isArray(values) ? values[0] || '' : values || ''
 }
 
+export function resolveGroupFilterLabel(selectedGroup, allGroups = []) {
+  if (!selectedGroup) return ''
+
+  const groupMap = new Map((Array.isArray(allGroups) ? allGroups : []).map(group => [group.id, group]))
+  return SPECIAL_GROUP_LABELS[selectedGroup] || groupMap.get(selectedGroup)?.name || selectedGroup
+}
+
 export function countActiveFilters({ filters, selectedGroup, selectedTag }) {
   return [
     filters?.subscriptions?.length || 0,
@@ -39,14 +46,13 @@ export function buildFilterSummaryItems({
   allTags = [],
 }) {
   const items = []
-  const groupMap = new Map((Array.isArray(allGroups) ? allGroups : []).map(group => [group.id, group]))
   const tagMap = new Map((Array.isArray(allTags) ? allTags : []).map(tag => [tag.id, tag]))
 
   if (selectedGroup) {
     items.push({
       key: 'group',
       label: '分组',
-      value: SPECIAL_GROUP_LABELS[selectedGroup] || groupMap.get(selectedGroup)?.name || selectedGroup,
+      value: resolveGroupFilterLabel(selectedGroup, allGroups),
     })
   }
 

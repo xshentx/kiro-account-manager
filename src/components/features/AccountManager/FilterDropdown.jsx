@@ -1,5 +1,5 @@
 import { useState, useRef, useEffect } from 'react'
-import { Filter, X, ChevronDown } from 'lucide-react'
+import { Filter, X } from 'lucide-react'
 import { useTheme } from '../../../contexts/ThemeContext'
 import { useTranslation } from 'react-i18next'
 import SearchableTagSelect from './SearchableTagSelect'
@@ -49,15 +49,49 @@ function SectionCard({ title, subtitle, children, colors }) {
   )
 }
 
-function FilterSelect({ label, value, options, onChange, onClear, colors }) {
+function FilterField({ label, hint, active, colors, accent, children, fullWidth = false }) {
+  return (
+    <div
+      className={`
+        rounded-xl border p-3 space-y-2.5 transition-all duration-200
+        ${active ? `${accent.border} ${accent.bgSoft} shadow-sm ${accent.shadow}` : `${colors.cardBorder} ${colors.card}`}
+        ${fullWidth ? 'sm:col-span-2' : ''}
+      `}
+    >
+      <div className="flex items-start justify-between gap-2">
+        <div className="min-w-0">
+          <label className={`block text-xs font-medium ${colors.textMuted}`}>
+            {label}
+          </label>
+          {hint && (
+            <p className={`mt-1 text-[11px] leading-5 ${colors.textMuted}`}>
+              {hint}
+            </p>
+          )}
+        </div>
+        {active && (
+          <span className={`shrink-0 rounded-full px-2 py-0.5 text-[10px] font-semibold ${accent.bgSoft} ${accent.text}`}>
+            已设置
+          </span>
+        )}
+      </div>
+      {children}
+    </div>
+  )
+}
+
+function FilterSelect({ label, hint, value, options, onChange, onClear, colors, accent }) {
   const displayValue = Array.isArray(value) ? (value[0] || '') : (value || '')
   const hasValue = displayValue !== ''
 
   return (
-    <div>
-      <label className={`block text-xs font-medium ${colors.textMuted} mb-2`}>
-        {label}
-      </label>
+    <FilterField
+      label={label}
+      hint={hint}
+      active={hasValue}
+      colors={colors}
+      accent={accent}
+    >
       <div className="relative">
         <select
           value={displayValue}
@@ -90,7 +124,7 @@ function FilterSelect({ label, value, options, onChange, onClear, colors }) {
           </button>
         )}
       </div>
-    </div>
+    </FilterField>
   )
 }
 
@@ -103,13 +137,11 @@ function FilterDropdown({
   allTags = [],
   selectedTag,
   onTagFilter,
-  defaultGroupCollapsed = false,
 }) {
   const { colors, theme } = useTheme()
   const accent = getThemeAccent(theme)
   const { t } = useTranslation()
   const [open, setOpen] = useState(false)
-  const [showGroupSection, setShowGroupSection] = useState(() => !defaultGroupCollapsed)
   const dropdownRef = useRef(null)
 
   useEffect(() => {
@@ -121,12 +153,6 @@ function FilterDropdown({
     document.addEventListener('mousedown', handleClickOutside)
     return () => document.removeEventListener('mousedown', handleClickOutside)
   }, [])
-
-  useEffect(() => {
-    if (selectedGroup) {
-      setShowGroupSection(true)
-    }
-  }, [selectedGroup])
 
   const activeCount = countActiveFilters({ filters, selectedGroup, selectedTag })
   const summaryItems = buildFilterSummaryItems({
@@ -247,34 +273,9 @@ function FilterDropdown({
             {(allGroups.length > 0 || allTags.length > 0) && (
               <SectionCard
                 title="基础筛选"
-                subtitle="优先按分组和标签缩小范围，最适合高频定位。"
+                subtitle="优先按标签缩小范围，适合高频定位。"
                 colors={colors}
               >
-                {allGroups.length > 0 && (
-                  <div>
-                    <button
-                      onClick={() => setShowGroupSection(prev => !prev)}
-                      className={`cursor-pointer w-full flex items-center justify-between text-xs font-medium ${colors.textMuted} mb-2 px-2 py-1.5 rounded-lg ${colors.cardHover} transition-colors duration-200 focus:outline-none focus:ring-2 ${accent.ring}`}
-                    >
-                      <span>{(t('groups.title') || '分组') + (showGroupSection ? '' : '（已折叠）')}</span>
-                      <ChevronDown size={14} className={`transition-transform duration-200 ${showGroupSection ? 'rotate-180' : ''}`} />
-                    </button>
-                    {showGroupSection && (
-                      <SearchableTagSelect
-                        tags={allGroups}
-                        value={selectedGroup}
-                        onChange={onGroupFilter}
-                        placeholder={t('groups.searchPlaceholder') || '搜索分组...'}
-                        showAllOption={true}
-                        showNoneOption={true}
-                        allLabel={t('groups.all') || '全部'}
-                        noneLabel={t('groups.noGroup') || '无分组'}
-                        hasLabel={t('groups.hasGroup') || '有分组'}
-                      />
-                    )}
-                  </div>
-                )}
-
                 {allTags.length > 0 && (
                   <div>
                     <label className={`block text-xs font-medium ${colors.textMuted} mb-2`}>
@@ -298,45 +299,76 @@ function FilterDropdown({
 
             <SectionCard
               title="高级筛选"
-              subtitle="按订阅、状态、登录方式和使用量进一步精确收敛。"
+              subtitle="按订阅、状态、登录方式、使用量和分组进一步精确收敛。"
               colors={colors}
             >
               <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
                 <FilterSelect
                   label={t('filter.subscription')}
+                  hint="适合快速筛出不同套餐层级的账号。"
                   value={filters.subscriptions?.length > 0 ? filters.subscriptions[0] : ''}
                   options={SUBSCRIPTION_OPTIONS}
                   onChange={(value) => onFiltersChange({ ...filters, subscriptions: [value] })}
                   onClear={() => onFiltersChange({ ...filters, subscriptions: [] })}
                   colors={colors}
+                  accent={accent}
                 />
 
                 <FilterSelect
                   label={t('filter.status')}
+                  hint="查看正常、封顶、失效等当前状态。"
                   value={filters.statuses?.length > 0 ? filters.statuses[0] : ''}
                   options={STATUS_OPTIONS}
                   onChange={(value) => onFiltersChange({ ...filters, statuses: [value] })}
                   onClear={() => onFiltersChange({ ...filters, statuses: [] })}
                   colors={colors}
+                  accent={accent}
                 />
 
                 <FilterSelect
                   label={t('filter.provider')}
+                  hint="按登录来源区分 Google、GitHub 等账号。"
                   value={filters.providers?.length > 0 ? filters.providers[0] : ''}
                   options={PROVIDER_OPTIONS}
                   onChange={(value) => onFiltersChange({ ...filters, providers: [value] })}
                   onClear={() => onFiltersChange({ ...filters, providers: [] })}
                   colors={colors}
+                  accent={accent}
                 />
 
                 <FilterSelect
                   label="使用量"
+                  hint="快速关注不同 usage 区间的账号。"
                   value={filters.usageRange || ''}
                   options={USAGE_RANGE_OPTIONS}
                   onChange={(value) => onFiltersChange({ ...filters, usageRange: value })}
                   onClear={() => onFiltersChange({ ...filters, usageRange: null })}
                   colors={colors}
+                  accent={accent}
                 />
+
+                {allGroups.length > 0 && (
+                  <FilterField
+                    label={t('groups.title') || '分组'}
+                    hint="不常用时放最后，需要时也能直接搜索或切到有/无分组。"
+                    active={Boolean(selectedGroup)}
+                    colors={colors}
+                    accent={accent}
+                    fullWidth
+                  >
+                    <SearchableTagSelect
+                      tags={allGroups}
+                      value={selectedGroup}
+                      onChange={onGroupFilter}
+                      placeholder={t('groups.searchPlaceholder') || '搜索分组...'}
+                      showAllOption={true}
+                      showNoneOption={true}
+                      allLabel={t('groups.all') || '全部'}
+                      noneLabel={t('groups.noGroup') || '无分组'}
+                      hasLabel={t('groups.hasGroup') || '有分组'}
+                    />
+                  </FilterField>
+                )}
               </div>
             </SectionCard>
           </div>
