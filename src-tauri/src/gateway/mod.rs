@@ -1000,22 +1000,12 @@ mod tests {
         assert_eq!(logs[2].outcome, "success");
         assert_eq!(logs[0].client_ip, "127.0.0.1");
         assert!(
-            logs[0]
-                .request_body
-                .as_deref()
-                .is_some_and(|body| body.contains("\"hello world\"")),
-            "count_tokens request body should be logged"
+            logs[0].request_body.is_none(),
+            "request body should not be logged by default"
         );
-        let count_tokens_response = logs[0]
-            .response_body
-            .as_deref()
-            .and_then(|body| serde_json::from_str::<Value>(body).ok())
-            .expect("count_tokens response body should be logged as json");
-        assert_eq!(
-            count_tokens_response
-                .get("input_tokens")
-                .and_then(Value::as_u64),
-            Some(2)
+        assert!(
+            logs[0].response_body.is_none(),
+            "response body should not be logged by default"
         );
     }
 
@@ -1050,11 +1040,12 @@ mod tests {
         assert_eq!(logs[0].outcome, "error");
         assert_eq!(logs[0].status_code, response.status().as_u16());
         assert!(
-            logs[0]
-                .request_body
-                .as_deref()
-                .is_some_and(|body| body.contains("\"tools/list\"")),
-            "mcp request body should be logged"
+            logs[0].request_body.is_none(),
+            "request body should not be logged by default"
+        );
+        assert!(
+            logs[0].response_body.is_none(),
+            "response body should not be logged by default"
         );
         assert!(
             state.last_error.lock().await.is_some(),
@@ -1227,6 +1218,29 @@ mod tests {
 
         let response = reqwest::Client::new()
             .get(format!("http://127.0.0.1:{port}/health"))
+            .send()
+            .await
+            .expect("health request should succeed");
+
+        assert_eq!(response.status(), StatusCode::UNAUTHORIZED);
+        stop_runtime(&mut runtime).await;
+    }
+
+    #[tokio::test]
+    async fn runtime_rejects_raw_authorization_header_without_bearer_over_real_http() {
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").expect("listener should bind");
+        let port = listener
+            .local_addr()
+            .expect("local addr should resolve")
+            .port();
+        drop(listener);
+
+        let config = runtime_test_gateway_config(port);
+        let mut runtime = spawn_runtime(config).await.expect("runtime should start");
+
+        let response = reqwest::Client::new()
+            .get(format!("http://127.0.0.1:{port}/health"))
+            .header("Authorization", "sk-test")
             .send()
             .await
             .expect("health request should succeed");

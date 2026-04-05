@@ -23,10 +23,11 @@ function normalizeTagLinks(tagLinks) {
 }
 
 export function getSafeAccountDisplayName(account) {
+  const normalizedUserId = pickNonEmptyString(account?.userId)
+
   return pickNonEmptyString(
     account?.email,
-    account?.userId,
-    account?.user_id,
+    normalizedUserId,
     account?.label,
   ) || 'Unknown'
 }
@@ -42,11 +43,10 @@ export function normalizeAccountForUi(account) {
     ...source,
     email: pickNonEmptyString(source.email),
     userId: pickNonEmptyString(source.userId),
-    user_id: pickNonEmptyString(source.user_id),
     label: pickNonEmptyString(source.label),
     status: pickNonEmptyString(source.status) || 'unknown',
     provider: pickNonEmptyString(source.provider),
-    authMethod: pickNonEmptyString(source.authMethod, source.auth_method),
+    authMethod: pickNonEmptyString(source.authMethod),
     addedAt: pickNonEmptyString(source.addedAt),
     expiresAt: pickNonEmptyString(source.expiresAt),
     groupId: pickNonEmptyString(source.groupId) || null,

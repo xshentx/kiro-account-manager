@@ -180,28 +180,9 @@ export const buildClientSamples = (baseUrl, apiKey) => {
 }
 
 export const formatGatewayAccountOptionLabel = (account) => {
-  const label = String(account?.label || '').trim()
   const email = String(account?.email || '').trim()
-  const userId = String(account?.userId || account?.user_id || '').trim()
-  const status = String(account?.status || 'unknown').trim()
-  const id = String(account?.id || '').trim()
-  const primary = label || email || userId || id || '未知账号'
-  const secondary = [email, userId]
-    .filter(Boolean)
-    .filter(value => value !== primary)
-    .join(' / ')
-  const shortId = id ? id.slice(0, 8) : ''
-  const parts = [primary]
-
-  if (secondary) {
-    parts.push(secondary)
-  }
-  if (shortId) {
-    parts.push(`ID:${shortId}`)
-  }
-  parts.push(status)
-
-  return parts.join(' | ')
+  const userId = String(account?.userId || '').trim()
+  return email || userId || '未知账号'
 }
 
 export const buildGatewayStatusSummary = ({ config, status, errorHistory, lastStatusSyncAt }) => {

@@ -60,20 +60,20 @@ export const hydrateGatewayConfig = (gatewayConfig) => ({
   enabled: gatewayConfig?.enabled ?? false,
   host: gatewayConfig?.host || '127.0.0.1',
   port: gatewayConfig?.port || 8765,
-  apiKey: gatewayConfig?.access_token || gatewayConfig?.accessToken || '',
+  apiKey: gatewayConfig?.accessToken || '',
   region: gatewayConfig?.region || 'us-east-1',
-  accountMode: gatewayConfig?.account_mode === 'local'
+  accountMode: gatewayConfig?.accountMode === 'local'
     ? 'single'
-    : (gatewayConfig?.account_mode || gatewayConfig?.accountMode || 'single'),
-  accountId: gatewayConfig?.account_id || gatewayConfig?.accountId || null,
-  groupId: gatewayConfig?.group_id || gatewayConfig?.groupId || null,
+    : (gatewayConfig?.accountMode || 'single'),
+  accountId: gatewayConfig?.accountId || null,
+  groupId: gatewayConfig?.groupId || null,
   strategy: gatewayConfig?.strategy || 'round_robin',
   threshold: gatewayConfig?.threshold ?? 90,
-  localOnly: gatewayConfig?.local_only ?? gatewayConfig?.localOnly ?? true,
-  allowedIpsText: Array.isArray(gatewayConfig?.allowed_ips || gatewayConfig?.allowedIps)
-    ? (gatewayConfig.allowed_ips || gatewayConfig.allowedIps).join('\n')
+  localOnly: gatewayConfig?.localOnly ?? true,
+  allowedIpsText: Array.isArray(gatewayConfig?.allowedIps)
+    ? gatewayConfig.allowedIps.join('\n')
     : '',
-  logLevel: gatewayConfig?.log_level || gatewayConfig?.logLevel || 'debug',
+  logLevel: gatewayConfig?.logLevel || 'debug',
 })
 
 export const buildGatewayStatusState = (gatewayStatus, gatewayConfig, fallbackConfig = DEFAULT_GATEWAY_CONFIG) => ({

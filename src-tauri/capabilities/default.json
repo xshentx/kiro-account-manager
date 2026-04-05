@@ -16,7 +16,6 @@
     "opener:default",
     "updater:default",
     "dialog:default",
-    "fs:default",
     "fs:allow-write-text-file",
     {
       "identifier": "http:default",

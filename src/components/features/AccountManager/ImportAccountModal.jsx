@@ -401,12 +401,12 @@ function ImportAccountModal({ onClose, onSuccess, onNavigate }) {
         setKiroCliResult({
           success: true,
           isNew: result.is_new,
-          email: result.account?.email || result.account?.user_id || '未知账号'
+          email: result.account?.email || result.account?.userId || '未知账号'
         })
 
         onSuccess?.({
-          added: result.is_new ? [{ email: result.account?.email || result.account?.user_id || '未知账号', account: result.account }] : [],
-          updated: result.is_new ? [] : [{ email: result.account?.email || result.account?.user_id || '未知账号', account: result.account }],
+          added: result.is_new ? [{ email: result.account?.email || result.account?.userId || '未知账号', account: result.account }] : [],
+          updated: result.is_new ? [] : [{ email: result.account?.email || result.account?.userId || '未知账号', account: result.account }],
         })
       } else {
         setKiroCliResult({

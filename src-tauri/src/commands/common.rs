@@ -146,43 +146,51 @@ pub fn calc_status(is_banned: bool, is_auth_error: bool) -> String {
     }
 }
 
-/// 从 `usage_data` 中简单提取 `email` 和 `user_id`（不依赖结构体）
+fn read_non_empty_string_field(
+    value: &serde_json::Value,
+    primary_path: &[&str],
+    fallback_key: &str,
+) -> Option<String> {
+    let nested = primary_path
+        .iter()
+        .try_fold(value, |current, key| current.get(*key))
+        .and_then(|field| field.as_str())
+        .map(str::trim)
+        .filter(|field| !field.is_empty())
+        .map(std::string::ToString::to_string);
+
+    nested.or_else(|| {
+        value
+            .get(fallback_key)
+            .and_then(|field| field.as_str())
+            .map(str::trim)
+            .filter(|field| !field.is_empty())
+            .map(std::string::ToString::to_string)
+    })
+}
+
+/// 从 `usage_data` 中提取 `email` 和 `user_id`
+/// 兼容 `userInfo.email/userInfo.userId` 与顶层 `email/userId`
 pub fn extract_user_info(usage_data: &serde_json::Value) -> (Option<String>, Option<String>) {
-    let user_info = usage_data.get("userInfo");
-
-    let email = user_info
-        .and_then(|u| u.get("email"))
-        .and_then(|e| e.as_str())
-        .filter(|s| !s.is_empty())
-        .map(std::string::ToString::to_string);
-
-    let user_id = user_info
-        .and_then(|u| u.get("userId"))
-        .and_then(|id| id.as_str())
-        .map(std::string::ToString::to_string);
+    let email = read_non_empty_string_field(usage_data, &["userInfo", "email"], "email");
+    let user_id = read_non_empty_string_field(usage_data, &["userInfo", "userId"], "userId");
 
     (email, user_id)
 }
 
 /// 查找已存在的账号索引
-/// 使用 `user_id` 去重（最简单直接的策略）
+/// 仅使用 `user_id` 去重
 pub fn find_existing_account_idx(
     accounts: &[Account],
-    email: Option<&String>,
+    _email: Option<&String>,
     _provider: &str,
     _refresh_token: &str,
     user_id: Option<&String>,
 ) -> Option<usize> {
-    // 只用 user_id 去重
     if let Some(uid) = user_id {
         return accounts
             .iter()
             .position(|a| a.user_id.as_ref() == Some(uid));
-    }
-
-    // 如果没有 user_id，用 email 兜底
-    if let Some(e) = email {
-        return accounts.iter().position(|a| a.email.as_ref() == Some(e));
     }
 
     None
@@ -222,7 +230,43 @@ mod tests {
     }
 
     #[test]
-    fn find_existing_account_idx_prefers_user_id_then_email() {
+    fn extract_user_info_falls_back_to_top_level_fields() {
+        let usage = serde_json::json!({
+            "email": "top@example.com",
+            "userId": "top-user-123"
+        });
+
+        assert_eq!(
+            extract_user_info(&usage),
+            (
+                Some("top@example.com".to_string()),
+                Some("top-user-123".to_string())
+            )
+        );
+    }
+
+    #[test]
+    fn extract_user_info_prefers_nested_fields_and_trims_values() {
+        let usage = serde_json::json!({
+            "email": "fallback@example.com",
+            "userId": "fallback-user",
+            "userInfo": {
+                "email": " nested@example.com ",
+                "userId": " nested-user "
+            }
+        });
+
+        assert_eq!(
+            extract_user_info(&usage),
+            (
+                Some("nested@example.com".to_string()),
+                Some("nested-user".to_string())
+            )
+        );
+    }
+
+    #[test]
+    fn find_existing_account_idx_uses_user_id_only() {
         let mut first = Account::new("first@example.com".to_string(), "first".to_string());
         first.user_id = Some("user-1".to_string());
 
@@ -237,11 +281,11 @@ mod tests {
             Some(0)
         );
         assert_eq!(
-            find_existing_account_idx(&accounts, Some(&second_email), "Google", "", None),
-            Some(1)
+            find_existing_account_idx(&accounts, None, "Google", "", None),
+            None
         );
         assert_eq!(
-            find_existing_account_idx(&accounts, None, "Google", "", None),
+            find_existing_account_idx(&accounts, Some(&second_email), "Google", "", None),
             None
         );
     }

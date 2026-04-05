@@ -2,7 +2,7 @@
 import { isActiveStatus, isBannedStatus, isCappedStatus, isUnavailableStatus } from './accountStatus'
 import { getSafeAccountDisplayName } from '../components/features/AccountManager/utils/accountRuntime'
 
-// 获取账号显示名称（email 或 user_id）
+// 获取账号显示名称（email 或 userId）
 export const getAccountDisplayName = (account) => {
   return getSafeAccountDisplayName(account)
 }

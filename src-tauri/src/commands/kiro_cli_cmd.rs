@@ -1,6 +1,7 @@
 #![allow(clippy::needless_pass_by_value)] // Tauri 命令需要按值传递参数
 
 use crate::account::Account;
+use crate::commands::common::extract_user_info;
 use crate::kiro_cli_db::read_kiro_cli_accounts;
 use crate::kiro_portal_client::KiroPortalClient;
 use crate::state::AppState;
@@ -42,18 +43,15 @@ fn determine_provider(cli_account: &crate::kiro_cli_db::KiroCliAccount) -> Strin
 fn find_existing_account(
     accounts: &[Account],
     user_id: Option<&String>,
-    email: Option<&String>,
+    _email: Option<&String>,
 ) -> Option<usize> {
-    accounts.iter().position(|a| {
-        // 使用 user_id 或 email 去重
-        if let (Some(uid), Some(a_uid)) = (user_id, &a.user_id) {
-            return uid == a_uid;
-        }
-        if let (Some(e), Some(a_e)) = (email, &a.email) {
-            return e == a_e;
-        }
-        false
-    })
+    if let Some(uid) = user_id {
+        return accounts
+            .iter()
+            .position(|a| a.user_id.as_ref() == Some(uid));
+    }
+
+    None
 }
 
 /// 创建账号标签
@@ -181,16 +179,7 @@ pub async fn import_from_kiro_cli(
 
     let (email, user_id, provider, usage_data) = match usage_result {
         Ok(usage) => {
-            let email = usage
-                .get("email")
-                .and_then(|v| v.as_str())
-                .map(std::string::ToString::to_string);
-
-            let user_id = usage
-                .get("userId")
-                .and_then(|v| v.as_str())
-                .map(std::string::ToString::to_string);
-
+            let (email, user_id) = extract_user_info(&usage);
             let provider = determine_provider(cli_account);
             (email, user_id, provider, Some(usage))
         }

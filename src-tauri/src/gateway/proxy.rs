@@ -90,7 +90,6 @@ struct WebSearchSource {
 
 type UpstreamRequestError = (StatusCode, &'static str, String, Option<String>);
 
-const MAX_LOG_BODY_CHARS: usize = 20_000;
 const STREAMING_RESPONSE_PLACEHOLDER: &str = "[streaming response omitted from request log]";
 
 #[derive(Debug, Clone)]
@@ -281,22 +280,8 @@ fn serialize_logged_value(value: &Value) -> String {
 }
 
 fn prepare_logged_body(body: &str) -> Option<String> {
-    if body.trim().is_empty() {
-        return None;
-    }
-
-    let sanitized = sanitize_error(body);
-    let total_chars = sanitized.chars().count();
-    if total_chars <= MAX_LOG_BODY_CHARS {
-        return Some(sanitized);
-    }
-
-    let mut truncated: String = sanitized.chars().take(MAX_LOG_BODY_CHARS).collect();
-    truncated.push_str(&format!(
-        "\n...[truncated {} chars]",
-        total_chars.saturating_sub(MAX_LOG_BODY_CHARS)
-    ));
-    Some(truncated)
+    let _ = body;
+    None
 }
 
 fn write_request_log(
@@ -1293,7 +1278,9 @@ fn verify_client_auth(headers: &HeaderMap, config: &GatewayConfig) -> Result<(),
         .get(header::AUTHORIZATION)
         .and_then(|value| value.to_str().ok())
         .map(str::trim)
-        .and_then(|value| value.strip_prefix("Bearer ").or(Some(value)));
+        .and_then(|value| value.strip_prefix("Bearer "))
+        .map(str::trim)
+        .filter(|value| !value.is_empty());
     let api_key = headers
         .get("x-api-key")
         .and_then(|value| value.to_str().ok());
